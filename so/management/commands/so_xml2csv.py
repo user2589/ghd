@@ -8,22 +8,23 @@ and produces a set of CSV files suitable for use with mysqlimport
 The StackExchange data dump can be downloaded here:
     https://archive.org/details/stackexchange
 
-
 """
 
 import sys
-import argparse
 import csv
 import xml.sax
 import re
 
-PY3 = sys.version_info > (3,)
+
+from django.core.management.base import BaseCommand
+
+PY3 = sys.version_info > (3,)  # six would be nicer but will create a dependency1
 
 
 def iNone(attr):
     try:
         return int(attr)
-    except (ValueError, TypeError) as e:
+    except (ValueError, TypeError) as _:
         return None
 
 
@@ -57,31 +58,46 @@ class DictWriter(object):
             self._convert = self._convert3
 
     def writerow(self, row):
-        pass
         if not self.init:
             self.init = True
         else:
             self.stream.write("\r\n")
 
-        for i, field in enumerate(self.fields):
+        if row['id'] == 17:
+            body = row['body'].encode('utf8')
+            b = self._escape(body)
+            a = self._convert(body)
+            c = True
+        first = True
+        for field in self.fields:
+            if first:
+                first = False
+            else:
+                self.stream.write(",")
             self.stream.write(self._convert(row[field]))
-            self.stream.write(",")
+
+    def writeheader(self):
+        self.writerow({field: field for field in self.fields})
+
 
 
 class SOHandler(xml.sax.ContentHandler):
 
     writer = None
-    tags_fname = None
-    tagwriter_fname = None
-    tagwriter = None
     tags = None
+    options = None
 
     def row_handler(self): pass
 
-    def __init__(self, tags_fname=None, tagwriter_fname=None):
-        self.writer = csv.writer(sys.stdout)
-        self.tags_fname = tags_fname or "so_tag_names.csv"
-        self.tagwriter_fname = tagwriter_fname or "tags.csv"
+    def __init__(self, **options):
+        if options.get('output', '-') == "-":
+            outfile = sys.stdout
+        else:
+            outfile = open(options['output'], 'wb')
+        self.writer = csv.writer(outfile)
+        self.tagwriter_fname = options.get('tagwriter_fname')
+        self.tags_fname = options.get('tags_fname')
+        self.options = options
         # this is an old-style class, so explicit __init__ instead of super()
         xml.sax.ContentHandler.__init__(self)
 
@@ -94,13 +110,16 @@ class SOHandler(xml.sax.ContentHandler):
     def _parse_post(self, attrs):
         post_id = int(attrs['Id'])
         is_question = int(attrs.get('PostTypeId') == "1")
+        tags = []
         if is_question:
-            for tag in self._post_tags(attrs.get('Tags')):
-                tag_id = self.tags[tag]
-                self.tagwriter.writerow({
-                    'post_id': post_id,
-                    'tag_id': tag_id
-                })
+            tags = self._post_tags(attrs.get('Tags'))
+            # for tag in tags:
+            #     tag_id = self.tags[tag]
+            #     self.tagwriter.writerow({
+            #         'id': None,
+            #         'post_id': post_id,
+            #         'tag_id': tag_id
+            #     })
         return {
             'id': post_id,
             'question': is_question,
@@ -119,6 +138,7 @@ class SOHandler(xml.sax.ContentHandler):
             'answers_count': int(attrs.get('AnswerCount', 0)),
             'comments_count': int(attrs.get('CommentCount', 0)),
             'favorites_count': int(attrs.get('FavoriteCount', 0)),
+            'tags': "{%s}" % ",".join(tags),
         }
 
     def _parse_user(self, attrs):
@@ -156,17 +176,18 @@ class SOHandler(xml.sax.ContentHandler):
 
     def deferred_init(self, name):
         if name == 'posts':
-            self.tags = {
-                row[1]: int(row[0]) for row in csv.reader(
-                    open(self.tags_fname, 'r'))}
+            # self.tags = {
+            #     row[1]: int(row[0]) for row in csv.reader(
+            #         open(self.tags_fname, 'r'))}
             columns = ['id', 'question', 'title', 'body', 'owner_id',
                        'accepted_answer', 'created_at', 'score', 'parent_id',
                        'views', 'last_editor_id', 'last_edited_at',
                        'last_activity_at', 'community_owned_at',
-                       'answers_count', 'comments_count', 'favorites_count']
+                       'answers_count', 'comments_count', 'favorites_count',
+                       'tags']
             self.row_handler = self._parse_post
-            self.tagwriter = DictWriter(
-                open(self.tagwriter_fname, 'w'), ['post_id', 'tag_id'])
+            # self.tagwriter = DictWriter(
+            #     open(self.tagwriter_fname, 'w'), ['id', 'post_id', 'tag_id'])
         elif name == 'users':
             columns = ['id', 'name', 'email_hash', 'reputation', 'created_at',
                        'website_url', 'location', 'age', 'views', 'upvotes',
@@ -182,6 +203,7 @@ class SOHandler(xml.sax.ContentHandler):
             raise ValueError('posts, users, tags or votes tag expected')
 
         self.writer = DictWriter(sys.stdout, columns)
+        self.writer.writeheader()
 
     def startElement(self, name, attrs):
         if name in ('posts', 'tags', 'users', 'votes'):
@@ -192,14 +214,34 @@ class SOHandler(xml.sax.ContentHandler):
             self.writer.writerow(self.row_handler(attrs))
 
 
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(
-        description="Transform stackexchange dump to csv format. The script "
-                    "accept XML file on standard input and prints CSV to "
-                    "the standard output")
-    args = parser.parse_args()
+class Command(BaseCommand):
+    help = "Transform stackexchange dump to csv format. The script " \
+            "accept XML file on standard input and prints CSV to " \
+            "the standard output"
+    requires_system_checks = False
 
-    parser = xml.sax.make_parser()
-    parser.setContentHandler(SOHandler())
-    parser.parse(sys.stdin)
-    # parser.parse(open('Posts2200.xml', 'r'))  # sys.stdin)
+    def add_arguments(self, parser):
+        parser.add_argument('input', default="-", nargs="?",
+                            help='File to use as input. .gz files are ok; '
+                                 'empty  or "-" for stdin')
+        parser.add_argument('-o', '--output', default="-",
+                            help='Output filename, "-" or skip for stdout')
+        parser.add_argument('--tags_fname', default='so_tag.csv',
+                            help='CSV file with tags')
+        parser.add_argument('--tagwriter_fname', default='so_post_tags.csv',
+                            help='tag to normalize for. Use "all" for total '
+                                 'number of posts, omit option for none')
+
+    def handle(self, *args, **options):
+        parser = xml.sax.make_parser()
+        parser.setContentHandler(SOHandler(**options))
+        if options.get('input', '-') == '-':
+            infile = sys.stdin
+        else:
+            infile = open(options['input'])
+        parser.parse(infile)
+
+
+if __name__ == '__main__':
+    utility = Command(sys.argv[1:])
+    utility.execute()

@@ -2,6 +2,7 @@
 from __future__ import unicode_literals
 
 from django.db import models
+from django.contrib.postgres.fields import ArrayField
 
 
 class User(models.Model):
@@ -18,48 +19,38 @@ class User(models.Model):
     downvotes = models.PositiveIntegerField(blank=True, null=True)
     about_me = models.TextField(blank=True, null=True)
 
-    class Meta:
-        db_table = 'so_users'
-
 
 class Tag(models.Model):
     name = models.CharField(max_length=25)
-    count = models.PositiveIntegerField()
+    count = models.PositiveIntegerField(default=0)
     # these are safe to ignore
     excerpt_post_id = models.IntegerField(blank=True, null=True)
     wiki_post_id = models.IntegerField(blank=True, null=True)
 
-    class Meta:
-        db_table = 'so_tag_names'
-
 
 class Post(models.Model):
-    question = models.IntegerField(blank=True, null=True)
+    question = models.BooleanField(default=False)
     title = models.CharField(max_length=255, blank=True, null=True)
     body = models.TextField(blank=True, null=True)
-    owner = models.ForeignKey(User)
+    owner = models.ForeignKey(User, related_name='owned_posts')
     accepted_answer = models.IntegerField(
         blank=True, null=True, help_text="only for questions")
     created_at = models.DateTimeField()
     score = models.SmallIntegerField(blank=True, null=True)
     parent = models.ForeignKey(
-        "self", blank=True, null=True, help_text="only for answers")
-    views = models.IntegerField()
-    last_editor = models.ForeignKey(User, blank=True, null=True)
-    last_edited_at = models.DateTimeField()
-    last_activity_at = models.DateTimeField()
-    community_owned_at = models.DateTimeField()
-    answers_count = models.PositiveIntegerField()
-    comments_count = models.PositiveIntegerField()
-    favorites_count = models.PositiveIntegerField()
+        "self", blank=True, null=True, help_text="only for answers",
+        related_name='answers')
+    views = models.IntegerField(default=0)
+    last_editor = models.ForeignKey(
+        User, blank=True, null=True, related_name='edited_posts')
+    last_edited_at = models.DateTimeField(null=True, blank=True)
+    last_activity_at = models.DateTimeField(null=True, blank=True)
+    community_owned_at = models.DateTimeField(null=True, blank=True)
+    answers_count = models.PositiveIntegerField(default=0)
+    comments_count = models.PositiveIntegerField(default=0)
+    favorites_count = models.PositiveIntegerField(default=0)
+    tags = ArrayField(models.CharField(max_length=25))
+    # tags = models.ManyToManyField(Tag, related_name='posts')
 
     class Meta:
-        db_table = 'so_posts'
-
-
-class SoTags(models.Model):
-    tag_id = models.IntegerField()
-    post_id = models.IntegerField()
-
-    class Meta:
-        db_table = 'so_tags'
+        ordering = ['created_at']

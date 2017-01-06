@@ -1,5 +1,6 @@
 
 import sys
+import logging
 
 from django.core.management.base import BaseCommand
 
@@ -15,12 +16,16 @@ class Command(BaseCommand):
         parser.add_argument('url', nargs='?', help='repository url')
 
     def handle(self, *args, **options):
+        logging.basicConfig()
+        logger = logging.getLogger('ghd.scraper.utils')
+        logger.setLevel(40 - 10*options['verbosity'])
+
         if options['url']:
             urls = (options['url'],)
         else:
             urls = sys.stdin
 
-        scheduled, total = utils.queue_repos(urls)
+        repos, total = utils.create_repos(urls)
 
-        return utils.format_res(scheduled, total)
+        return utils.format_res(len(repos), total)
 

@@ -3,6 +3,7 @@ from __future__ import unicode_literals
 
 from django.db import models
 from django.utils.datastructures import DictWrapper
+from django.contrib.postgres.fields import ArrayField
 
 
 class FixedCharField(models.CharField):
@@ -85,7 +86,8 @@ class Commit(models.Model):
         User, blank=True, null=True, related_name='committed_commits')
 
     # parent commits sha separated by newline
-    parents = models.CharField(max_length=255, default='')
+    # parents = models.CharField(max_length=255, default='')
+    parents = ArrayField(models.CharField(max_length=40))
 
     def __str__(self):
         return self.sha
