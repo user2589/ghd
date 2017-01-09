@@ -17,7 +17,7 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = [
     'ghtorrent',
     'scraper',
-    'so',
+    # 'so',
     # 'django.contrib.admin',
     # 'django.contrib.auth',
     'django.contrib.contenttypes',
