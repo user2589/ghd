@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from __future__ import print_function
+import os
 import argparse
 import tempfile
 import pygit2
@@ -51,6 +52,7 @@ def get_commits(repo_url):
                 'fstats': fstats,
             })
     finally:
+        os.chdir('/tmp')
         shutil.rmtree(folder)
 
     return commits

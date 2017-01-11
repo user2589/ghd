@@ -1,20 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import sys
+import csv
 import xml.sax
 import argparse
 # import networkx as nx  # 64Gb RAM is not enough to convert to pandas DF
 import numpy as np
 import pandas as pd
 
+CACHE_PATH = ''
+
 
 class SOHandler(xml.sax.ContentHandler):
     df = None  # adjanscency graph
 
-    def __init__(self, tagfile):
-        tags = pd.read_csv(tagfile)['name']
-        tags[len(tags)] = "nan"  # somehow it is not in the original tagset
+    def __init__(self, tags):
         self.df = pd.DataFrame(0, columns=tags, index=tags)
         xml.sax.ContentHandler.__init__(self)
 
@@ -38,6 +40,35 @@ class SOHandler(xml.sax.ContentHandler):
                             attrs['Id'], t1, t2))
 
 
+def get_tags(tagfile):
+    tags = pd.read_csv(tagfile)['name']
+    tags[len(tags)] = "nan"  # somehow it is not in the original tagset
+    return tags
+
+
+def get_adj_matrix(tagfile, infile):
+    cache_fname = 'graph.csv'
+    if os.path.exists(os.path.join(CACHE_PATH, cache_fname)):
+        reader = csv.reader(open(cache_fname))
+        names = reader.next()[1:]
+        df = pd.DataFrame(0, dtype=np.float16, columns=names, index=names)
+        for row in reader:
+            tag = row[0]
+            df.loc[tag] = [float(v) if v else 0 for v in row[1:]]
+        return df
+    # ~10 hours
+    tags = get_tags(args.tagfile)  # less than a second
+    sax_parser = SOHandler(tags)
+    xml_parser = xml.sax.make_parser()
+    xml_parser.setContentHandler(sax_parser)
+    xml_parser.parse(args.input)
+
+    df = sax_parser.df
+    # df = df.div(np.diag(df), 'columns')
+    df.to_csv(cache_fname, float_format="%g")
+    return df
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Build tag adjascency matrix. in CSV')
@@ -53,13 +84,4 @@ if __name__ == '__main__':
                         help='Tags CSV file produced by xml2csv')
     args = parser.parse_args()
 
-    sax_parser = SOHandler(args.tagfile)
-
-    xml_parser = xml.sax.make_parser()
-    xml_parser.setContentHandler(sax_parser)
-    xml_parser.parse(args.input)
-
-    df = sax_parser.df
-    df = df.div(np.diag(df), 'columns')
-
-    df.to_csv(args.output)
+    df = get_adj_matrix(args.tagfile, args.input)
