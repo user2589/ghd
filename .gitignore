@@ -1,10 +1,10 @@
 *.csv
 csv/*
 *.xls
-*.log
 *.ipynb
 .ipynb*
-ghd/local_settings.py
+settings.py
+*/migrations/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

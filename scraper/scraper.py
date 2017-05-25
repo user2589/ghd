@@ -36,7 +36,7 @@ def get_commits(repo_url):
                 insertions = diff.stats.insertions
                 files = diff.stats.files_changed
                 fstats = {p.delta.new_file.path: p.line_stats
-                          for p in list(diff)}
+                          for p in list(diff)}  # ?, ins, del
             commits.append({
                 'sha': commit.oid,
                 'author': commit.author.name,
