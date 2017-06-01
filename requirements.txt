@@ -1,0 +1,19 @@
+# common dependencies
+requests
+django>=1.10
+# libarchive requires sudo apt-get install libarchive-dev
+libarchive
+
+# SCRAPER - now it's replaced with GHTorrent
+# pygit2
+# PyGithub
+
+# STACKOVERFLOW
+pandas
+numpy
+
+
+# GHTORRENT
+
+
+# PYPI
