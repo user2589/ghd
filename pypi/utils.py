@@ -60,7 +60,8 @@ def _shell(cmd, *args, **kwargs):
 def dependencies(package_path):
     # package_path could be either folder or file
     deps = _shell("docker.sh", package_path)
-    return [re.split("[>=<]", d, 1)[0] for d in deps.strip().split(",") if d]
+    return [re.split("[>=<]", d, 1)[0].strip().lower()
+            for d in deps.strip().split(",") if d]
 
 
 def loc_size(package_dir):
@@ -154,7 +155,10 @@ class Package(object):
             filename = os.path.join(self.tempdir, self.source['filename'])
 
         if not os.path.isfile(filename):
-            urlretrieve(self.source["url"], filename)
+            try:
+                urlretrieve(self.source["url"], filename)
+            except IOError:  # missing file (likely due to PyPi bug, very rare)
+                return None
         return filename
 
     @cache('_pkgdir')
