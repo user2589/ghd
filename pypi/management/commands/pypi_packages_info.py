@@ -36,7 +36,8 @@ class Command(BaseCommand):
                 p.github_url,
                 p.google_group,
                 ",".join(p.dependencies)
+                # p.size  # takes a lot of time to process
             ])
             options['output'].flush()
-            if p._pkgdir is not None:
+            if getattr(p, '_pkgdir', None):
                 shutil.rmtree(p._pkgdir)

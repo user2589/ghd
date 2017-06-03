@@ -60,7 +60,7 @@ def _shell(cmd, *args, **kwargs):
 def dependencies(package_path):
     # package_path could be either folder or file
     deps = _shell("docker.sh", package_path)
-    return [re.split("[>=<]", d, 1)[0].strip().lower()
+    return [re.split("[^\w-]", d.strip(), 1)[0].lower()
             for d in deps.strip().split(",") if d]
 
 
@@ -83,7 +83,7 @@ class Package(object):
     source = None  # info about package source download path and filename
 
     def __init__(self, name, save_path=SAVE_PATH):
-        self.name = name
+        self.name = name.lower()
         self.path = os.path.dirname(__file__) or '.'
         self._tempdir = save_path
         try:
@@ -168,10 +168,10 @@ class Package(object):
             return None
 
         formats = {
-            '.zip': 'unzip "%(fname)s" "%(bname)s/*" -d "%(dir)s" >/dev/null',
-            '.tar.gz':  'tar -C "%(dir)s" -zxvf "%(fname)s" "%(bname)s" >/dev/null',
-            '.tgz':     'tar -C "%(dir)s" -zxvf "%(fname)s" "%(bname)s" >/dev/null',
-            '.tar.bz2': 'tar -C "%(dir)s" -jxvf "%(fname)s" "%(bname)s" >/dev/null',
+            '.zip': 'unzip -qq "%(fname)s" "%(bname)s/*" -d "%(dir)s" 2>/dev/null',
+            '.tar.gz':  'tar -C "%(dir)s" -zxf "%(fname)s" "%(bname)s" 2>/dev/null',
+            '.tgz':     'tar -C "%(dir)s" -zxf "%(fname)s" "%(bname)s" 2>/dev/null',
+            '.tar.bz2': 'tar -C "%(dir)s" -jxf "%(fname)s" "%(bname)s" 2>/dev/null',
         }
 
         extension = ""
