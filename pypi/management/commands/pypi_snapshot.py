@@ -2,7 +2,7 @@
 import logging
 import datetime
 
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 
 from pypi import models
 from pypi import utils
@@ -10,10 +10,6 @@ from pypi import utils
 
 class Command(BaseCommand):
     help = 'Make a snapshot of PyPi data'
-
-    def add_arguments(self, parser):
-        parser.add_argument('repo', nargs='?',
-                            help='Repository URL to override the queue')
 
     def handle(self, *args, **options):
         logger = logging.getLogger('ghd.pypi')

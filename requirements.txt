@@ -17,3 +17,4 @@ numpy
 
 
 # PYPI
+# requires docker: sudo apt-get install docker-compose
