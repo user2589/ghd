@@ -12,6 +12,13 @@ from xml.etree import ElementTree
 import re
 import shutil
 
+# TODO: .whl support
+# - this is a zip format
+# - does not require sandbox
+# - need to extract completely (internal path is unknown)
+# - dependencies are in <something>.dist-info/metadata.json
+#   .run_requires.item.requires: list
+
 PY3 = sys.version_info[0] > 2
 if PY3:
     from urllib.request import urlretrieve  # Python3
@@ -49,19 +56,18 @@ def cache(key):
 def _shell(cmd, *args, **kwargs):
     if kwargs.get('local', True):
         cmd = os.path.join(_PATH, cmd)
+    output = subprocess.check_output((cmd,) + args)
     if PY3:
-        output = subprocess.check_output((cmd,) + args, timeout=60)
         output = output.decode('utf8')
-    else:
-        output = subprocess.check_output((cmd,) + args)
     return output
 
 
 def dependencies(package_path):
     # package_path could be either folder or file
     deps = _shell("docker.sh", package_path)
-    return [re.split("[^\w-]", d.strip(), 1)[0].lower()
-            for d in deps.strip().split(",") if d]
+    depslist = [re.split("[^\w._-]", d.strip(), 1)[0].lower()
+                for d in deps.strip().split(",") if d]
+    return [d for d in depslist if d]
 
 
 def loc_size(package_dir):
@@ -81,6 +87,15 @@ class Package(object):
     info = None  # stores cached package info
     raw_info = None  # text representation of info
     source = None  # info about package source download path and filename
+    # supported formats
+    unzip = 'unzip -qq "%(fname)s" "%(bname)s/*" -d "%(dir)s" 2>/dev/null'
+    untgz = 'tar -C "%(dir)s" -zxf "%(fname)s" "%(bname)s" 2>/dev/null'
+    formats = {
+        '.zip': unzip,
+        '.tar.gz': untgz,
+        '.tgz': untgz,
+        '.tar.bz2': untgz,
+    }
 
     def __init__(self, name, save_path=SAVE_PATH):
         self.name = name.lower()
@@ -98,7 +113,8 @@ class Package(object):
             pass  # malformed json
 
         for f in self.info["urls"]:
-            if f['python_version'] == 'source':
+            if f['python_version'] == 'source' and \
+                    any(f["url"].endswith(ext) for ext in self.formats):
                 self.source = f
                 break
 
@@ -156,7 +172,7 @@ class Package(object):
 
         if not os.path.isfile(filename):
             try:
-                urlretrieve(self.source["url"], filename)
+                urlretrieve(self.source['url'], filename)
             except IOError:  # missing file (likely due to PyPi bug, very rare)
                 return None
         return filename
@@ -167,23 +183,17 @@ class Package(object):
         if fname is None:
             return None
 
-        formats = {
-            '.zip': 'unzip -qq "%(fname)s" "%(bname)s/*" -d "%(dir)s" 2>/dev/null',
-            '.tar.gz':  'tar -C "%(dir)s" -zxf "%(fname)s" "%(bname)s" 2>/dev/null',
-            '.tgz':     'tar -C "%(dir)s" -zxf "%(fname)s" "%(bname)s" 2>/dev/null',
-            '.tar.bz2': 'tar -C "%(dir)s" -jxf "%(fname)s" "%(bname)s" 2>/dev/null',
-        }
-
         extension = ""
-        for ext in formats:
+        for ext in self.formats:
             if fname.endswith(ext):
                 extension = ext
                 break
         if not extension:
             raise ValueError("Unexpected archive format: %s" % fname)
+
         basename = os.path.basename(fname[:-len(extension)])
         pkgdir = os.path.join(self.tempdir, basename)
-        cmd = formats[extension] % {
+        cmd = self.formats[extension] % {
             'fname': fname, 'bname': basename, 'dir': self.tempdir}
         if not os.path.isdir(pkgdir):
             os.system(cmd)
@@ -251,4 +261,3 @@ class Package(object):
 def list_packages():
     tree = ElementTree.fromstring(Package._request("simple/").text)
     return [a.text for a in tree.iter('a')]
-

@@ -40,4 +40,8 @@ class Command(BaseCommand):
             ])
             options['output'].flush()
             if getattr(p, '_pkgdir', None):
-                shutil.rmtree(p._pkgdir)
+                try:
+                    # some archives have broken permissions, looks like tar bug
+                    shutil.rmtree(p._pkgdir)
+                except:
+                    pass

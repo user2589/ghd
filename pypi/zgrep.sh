@@ -5,7 +5,8 @@ FILE=$2
 
 if [[ -d ${FILE} ]]; then
     # this is a directory
-    grep -r -E -m1 -ohia ${PATTERN} ${FILE} | head -n 1
+    # suppress permissions denied messages
+    grep -r -E -m1 -ohia ${PATTERN} ${FILE} 2> /dev/null | head -n 1
 elif [[ ${FILE: -2} == "gz" ]]; then
     # sometimes there are 2 matches per line, so even with -m1 we need head
     gunzip < ${FILE} 2> /dev/null | grep -E -m1 -ohia ${PATTERN} | head -n 1
