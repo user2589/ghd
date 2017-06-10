@@ -64,6 +64,8 @@ def _shell(cmd, *args, **kwargs):
 
 def dependencies(package_path):
     # package_path could be either folder or file
+    if not os.path.isdir(package_path):
+        return []
     deps = _shell("docker.sh", package_path)
     depslist = [re.split("[^\w._-]", d.strip(), 1)[0].lower()
                 for d in deps.strip().split(",") if d]
