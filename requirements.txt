@@ -1,12 +1,11 @@
-# common dependencies
+# COMMON DEPENDENCIES
 requests
 django>=1.10
 # libarchive requires sudo apt-get install libarchive-dev
-libarchive
+# temporary disabled because of https://github.com/libarchive/libarchive/issues/913
+# libarchive
 
-# SCRAPER - now it's replaced with GHTorrent
-# pygit2
-# PyGithub
+# SCRAPER
 
 # STACKOVERFLOW
 pandas

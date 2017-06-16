@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import datetime
+import re
 
 
 def unix2str(timestamp, fmt="%Y-%m-%d %H:%M"):
@@ -54,6 +55,65 @@ def commits_gitpython(repo_path, ref='master', short_message=False):
             'message': utf8fy(message),
             'compressed.size': commit.size
         }
+
+
+def get_repo_name(repo_url):
+    assert(repo_url.endswith(".git"))
+    chunks = [c for c in re.split("[:/]", repo_url[:-4]) if c]
+    org = "" if len(chunks) < 2 else chunks[-2]
+    repo = chunks[-1]
+    return org, repo
+
+
+def commits_pygit2(repo_url, remove=True):
+    """ Iterate commits using Python libgit2 binding.
+    Unlike GitPython, it can clone repository for you and works in the same
+    memory space so it is much faster. It is kind of heavy, but can be handy if
+    you need to work with repository/commits content (e.g. code analysis)
+
+    :param repo_url Git repository URL (not GitHub URL!).
+            Example: git://github.com/user/repo.git
+    """
+    import os
+    import tempfile
+    import shutil
+
+    import pygit2
+    org, repo_name = get_repo_name(repo_url)
+    folder = tempfile.mkdtemp(prefix='_'.join(('ghd', org, repo_name, '')))
+    repo = pygit2.clone_repository(repo_url, folder, bare=True)
+
+    try:
+        for commit in repo.walk(repo.head.target):
+            # http://www.pygit2.org/objects.html#commits
+            deletions = insertions = files = None
+            fstats = []  # detailed per-file delta stats
+            if len(commit.parent_ids) == 1:
+                diff = repo.diff(str(commit.oid), str(commit.parent_ids[0]))
+                diff.find_similar()  # handle renamed files
+                deletions = diff.stats.deletions
+                insertions = diff.stats.insertions
+                files = diff.stats.files_changed
+                fstats = {p.delta.new_file.path: p.line_stats
+                          for p in list(diff)}  # ?, ins, del
+            yield {
+                'sha': commit.oid,
+                'author': commit.author.name,
+                'author_email': commit.author.email,
+                'committer': commit.committer.name,
+                'committer_email': commit.committer.email,
+                'message': commit.message.strip(),
+                'parent_ids': "\n".join(str(pid) for pid in commit.parent_ids),
+                'time': commit.commit_time,
+                'del': deletions,
+                'ins': insertions,
+                'files': files,
+                'fstats': fstats,
+            }
+    finally:
+        if remove:
+            os.chdir('/tmp')
+            shutil.rmtree(folder)
 
 
 def issues_PyGithub(github_token, repo_name):
