@@ -1,72 +1,7 @@
 
-import re
 import logging
 
-from ghtorrent import models as ght_models
-import models
-
 logger = logging.getLogger('ghd.scraper.utils')
-
-
-def format_res(scheduled, total):
-    return '%(scheduled)s out of %(total)s repos scheduled' % \
-           {'scheduled': scheduled, 'total': total}
-
-
-def create_repos(urls):
-    new = 0
-    repos = []
-    for repo_url in urls:
-        repo_url = repo_url.strip()
-        if not repo_url:
-            logger.info('Empty repository url, ignored')
-            continue
-
-        if '/' not in repo_url:
-            logger.warning('Invalid repo url, ignored: %s', repo_url)
-            continue
-
-        if re.match("[a-zA-Z0-9_-]{1,40}/[a-zA-Z0-9_.-]{1,100}$", repo_url):
-            repo_url = "git://github.com/%(gh_url)s.git" % {'gh_url': repo_url}
-
-        repo, created = models.Repo.objects.get_or_create(url=repo_url)
-
-        if created:
-            logger.debug("New repo scheduled for scraping: %s", repo_url)
-        else:
-            logger.debug("Repo already scheduled, ignored: %s", repo_url)
-
-        repos.append(repo)
-        new += created
-    logger.debug("Total %s new repos scheduled out of %s", len(repos), new)
-    return repos, new
-
-
-def queue_user(login):
-    try:
-        ght_user = ght_models.User.objects.get(login=login)
-    except ght_models.User.DoesNotExist:
-        # TODO: add github api fallback
-        logger.warning("User is not in GHTorrent, ignored: %s", login)
-        return 0, 0
-
-    if ght_user.type == 'organization':
-        logger.warning("The specified login belongs to an organization, "
-                       "ignored: %s", login)
-        return 0, 0
-
-    user, created = models.User.objects.get_or_create(login=login)
-    gh_urls = ght_models.Project.objects.filter(
-        commits__author__id=ght_user.id).distinct(
-        ).values_list('url', flat=True)
-    logger.debug("%s repositories discovered in GHTorrent commits history",
-                 len(gh_urls))
-
-    repos, scheduled = create_repos(gh_urls)
-    user.repos.add(*repos)
-    user.status = 1  # started
-    user.update_project_count()  # will also save changes
-    return scheduled, len(repos)
 
 
 def scrape(repo=None):
@@ -77,28 +12,6 @@ def scrape(repo=None):
     import time
     import json
 
-    start_time = time.time()
-    # select repository to scrape
-    if not repo:
-        repo = models.Repo.objects.filter(status=0).first()
-        if repo is None:
-            two_hrs_ago = datetime.datetime.now() - datetime.timedelta(hours=2)
-            repo = models.Repo.objects.filter(
-                status=1, last_updated__lt=two_hrs_ago).first()
-        if repo is None:
-            logger.debug("No repositories to scrape, quit")
-            return 0, ""
-        else:
-            logger.debug("Scraping an autoselected repo: %s", repo.url)
-    else:
-        logger.debug("Scraping the specified repo: %s", repo.url)
-
-    # scrape
-    # this is generator, no exceptions will be thrown
-    repo.status = 1  # started
-    repo.save()
-
-    logger.debug(".. cloning repository to collect commits")
     try:
         commits = scraper.get_commits(repo.url)
     except pygit2.GitError as e:

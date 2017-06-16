@@ -2,6 +2,13 @@
 from __future__ import unicode_literals
 
 from django.db import models
+from django.utils.datastructures import DictWrapper
+
+
+class FixedCharField(models.CharField):
+    def db_type(self, connection):
+        data = DictWrapper(self.__dict__, connection.ops.quote_name, "qn_")
+        return 'char(%(max_length)s)' % data
 
 
 class GHTModel(models.Model):
@@ -19,7 +26,7 @@ class GHTModel(models.Model):
 class CommitStats(GHTModel):
     repository = models.ForeignKey('Repository', related_name='monthly_commits',
                                    db_column='repo_id')
-    month = models.CharField(max_length=7)
+    month = FixedCharField(max_length=7)
     num = models.IntegerField()
 
     class Meta:
@@ -30,7 +37,7 @@ class CommitStats(GHTModel):
 class ClosedIssueStats(GHTModel):
     repository = models.ForeignKey('Repository', related_name='closed_issues',
                                    db_column='repo_id')
-    month = models.CharField(max_length=7)
+    month = FixedCharField(max_length=7)
     num = models.IntegerField()
 
     class Meta:
@@ -41,7 +48,7 @@ class ClosedIssueStats(GHTModel):
 class NewIssueStats(GHTModel):
     repository = models.ForeignKey('Repository', related_name='new_issues',
                                    db_column='repo_id')
-    month = models.CharField(max_length=7)
+    month = FixedCharField(max_length=7)
     num = models.IntegerField()
 
     class Meta:

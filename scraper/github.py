@@ -60,7 +60,7 @@ class API(object):
         payload = json.dumps({"query": query, "variables": params})
         return self._request(self.api_v4_url, 'post', payload)
 
-    def issues(self, repo_name, page=None):
+    def repo_issues(self, repo_name, page=None):
         url = "repos/%s/issues" % repo_name
         page = page or 1
         while True:
@@ -80,7 +80,7 @@ class API(object):
                 }
             page += 1
 
-    def issues_v4(self, repo_name, cursor=None):
+    def repo_issues_v4(self, repo_name, cursor=None):
         owner, repo = repo_name.split("/")
         query = """query ($owner: String!, $repo: String!, $cursor: String) {
         repository(name: $repo, owner: $owner) {
@@ -114,7 +114,7 @@ class API(object):
             if not data["issues"]["pageInfo"]["hasNextPage"]:
                 break
 
-    def commits(self, repo_name, page=None):
+    def repo_commits(self, repo_name, page=None):
         url = "repos/%s/commits" % repo_name
         page = page or 1
         while True:
@@ -139,7 +139,7 @@ class API(object):
                 }
             page += 1
 
-    def commits_v4(self, repo_name, cursor=None):
+    def repo_commits_v4(self, repo_name, cursor=None):
         """As of June 2017 GraphQL API does not allow to get commit parents
         Until this issue is fixed this method is only left for a reference
         Please use commits() instead"""
@@ -197,5 +197,3 @@ class API(object):
         r = requests.get(url + "-data", cookies=cookies, headers=headers)
         r.raise_for_status()
         return r.json()
-
-

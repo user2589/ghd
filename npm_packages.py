@@ -6,12 +6,10 @@ import csv
 import argparse
 import urllib
 import re
-import json
 
 from pprint import pprint
 
 import ijson.backends.yajl2 as ijson
-# import ijson
 
 try:
     string_type = basestring
