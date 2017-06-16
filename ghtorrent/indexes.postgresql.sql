@@ -8,7 +8,7 @@
 -- 21s
 ALTER TABLE ght_users ADD PRIMARY KEY (id);
 -- 1m 44s
-CREATE UNIQUE INDEX IF NOT EXISTS user_login ON public.ght_users (login);
+CREATE UNIQUE INDEX IF NOT EXISTS user_login_i ON public.ght_users (login);
 
 --10:01
 ALTER TABLE ght_repositories
@@ -17,7 +17,7 @@ ALTER TABLE ght_repositories
   ADD CONSTRAINT repository_forked_from_fk FOREIGN KEY (forked_from) REFERENCES ght_repositories (id)
 ;
 --11:48
-CREATE INDEX IF NOT EXISTS repository_name ON public.ght_repositories (name);
+CREATE INDEX IF NOT EXISTS repository_name_i ON public.ght_repositories (name);
 -- ~7:00
 CREATE INDEX IF NOT EXISTS repository_owner_i ON public.ght_repositories (owner_id);
 CREATE INDEX IF NOT EXISTS repository_forked_from_i ON public.ght_repositories (forked_from);

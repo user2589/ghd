@@ -1,9 +1,7 @@
 #!/usr/bin/env python
-# -*- coding: utf-8 -*-
 
 import csv
 import datetime
-
 
 def unix2str(timestamp, fmt="%Y-%m-%d %H:%M"):
     dt = datetime.datetime.fromtimestamp(timestamp)

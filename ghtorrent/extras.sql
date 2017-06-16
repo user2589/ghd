@@ -52,10 +52,10 @@ CREATE TABLE IF NOT EXISTS ght_commit_stats (
 
 -- 17:26:08
 INSERT INTO ght_commit_stats
-select rc.repository_id, to_char(c.created_at, 'YYYY-MM'), count(c.id)
+select rc.repository_id, to_char(c.created_at, 'YYYY-MM') as month, count(c.id)
 from ght_commits c, ght_repository_commits rc
 where c.id = rc.commit_id
-group by rc.repository_id, to_char(c.created_at, 'YYYY-MM');
+group by rc.repository_id, month;
 -- 03:03
 ALTER TABLE ght_commit_stats
   ADD CONSTRAINT commit_stats_repo_fk FOREIGN KEY (repo_id) REFERENCES ght_repositories (id);
@@ -75,9 +75,9 @@ CREATE TABLE IF NOT EXISTS ght_new_issues (
 
 -- 01:08
 INSERT INTO ght_new_issues
-select i.repo_id, to_char(i.created_at, 'YYYY-MM'), count(issue_id)
+select i.repo_id, to_char(i.created_at, 'YYYY-MM') as month, count(issue_id)
 from ght_issue_status i
-group by i.repo_id, to_char(i.created_at, 'YYYY-MM');
+group by i.repo_id, month;
 -- 01:37
 ALTER TABLE ght_new_issues
   ADD CONSTRAINT new_issues_repo_fk FOREIGN KEY (repo_id) REFERENCES ght_repositories (id);
@@ -96,16 +96,17 @@ CREATE TABLE IF NOT EXISTS ght_closed_issues (
   num     INT
 );
 
-select current_timestamp;
 INSERT INTO ght_closed_issues
 select i.repo_id, to_char(i.closed_at, 'YYYY-MM'), count(issue_id)
 from ght_issue_status i
 where i.closed
 group by i.repo_id, to_char(i.closed_at, 'YYYY-MM');
-select current_timestamp;
 
 ALTER TABLE ght_closed_issues
   ADD CONSTRAINT closed_issues_repo_fk FOREIGN KEY (repo_id) REFERENCES ght_repositories (id);
 --
 CREATE INDEX IF NOT EXISTS closed_issues_repo_i ON ght_closed_issues(repo_id);
-select current_timestamp;
+
+
+
+

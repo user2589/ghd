@@ -1,6 +1,8 @@
 
 from __future__ import unicode_literals
 
+from collections import OrderedDict
+
 from ghtorrent import models
 
 try:
@@ -50,10 +52,8 @@ class GitHubRepository(object):
     @staticmethod
     def _query(manager):
         stats = dict(manager.values_list('month', 'num'))
-        for ymonth in date_range(stats):
-            if ymonth not in stats:
-                stats[ymonth] = 0
-        return stats
+        return OrderedDict((ymonth, stats.get(ymonth, 0))
+                           for ymonth in date_range(stats))
 
     def commit_stats(self):
         return self._query(self.r.monthly_commits)

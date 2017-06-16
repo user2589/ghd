@@ -81,8 +81,8 @@ class User(models.Model):
         ('USR', 'individual'),
         ('ORG', 'organization'),
     ))
-    fake = models.BooleanField()  # NONSENSE: https://github.com/egranata/
-    deleted = models.BooleanField()  # NONSENSE: https://github.com/rupakg/
+    fake = models.BooleanField()  # inaccurate: https://github.com/egranata/
+    deleted = models.BooleanField()  # inaccurate: https://github.com/rupakg/
     long = models.DecimalField(max_digits=11, decimal_places=8, blank=True,
                                null=True, help_text="Longitude")
     lat = models.DecimalField(max_digits=10, decimal_places=8, blank=True,
@@ -150,6 +150,7 @@ class Commit(GHTModel):
     class Meta:
         db_table = 'ght_commits'
         managed = False
+        ordering = ['created_at']
 
 
 class CommitParents(GHTModel):
@@ -183,14 +184,15 @@ class IssueEvent(GHTModel):
     event_id = models.IntegerField()
     issue_id = models.IntegerField()
     actor_id = models.IntegerField()
-    action = models.CharField(max_length=255, choices=(
-        "closed", "reopened", "assigned", "merged", "renamed", "deployed",
-        "converted_note_to_issue", "unsubscribed", "locked", "base_ref_changed",
-        "labeled", "base_ref_force_pushed", "removed_from_project",
-        "review_requested", "moved_columns_in_project", "head_ref_cleaned",
-        "mentioned", "demilestoned", "added_to_project", "milestoned",
-        "unlabeled", "head_ref_force_pushed", "subscribed", "unassigned",
-        "head_ref_restored", "referenced", "unlocked", "head_ref_deleted"))
+    action = models.CharField(max_length=255)
+    # choices=(
+    # "closed", "reopened", "assigned", "merged", "renamed", "deployed",
+    # "converted_note_to_issue", "unsubscribed", "locked", "base_ref_changed",
+    # "labeled", "base_ref_force_pushed", "removed_from_project",
+    # "review_requested", "moved_columns_in_project", "head_ref_cleaned",
+    # "mentioned", "demilestoned", "added_to_project", "milestoned",
+    # "unlabeled", "head_ref_force_pushed", "subscribed", "unassigned",
+    # "head_ref_restored", "referenced", "unlocked", "head_ref_deleted"))
     action_specific = models.CharField(max_length=50, blank=True, null=True)
     created_at = models.DateTimeField()
 

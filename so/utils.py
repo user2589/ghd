@@ -19,7 +19,6 @@ import libarchive.public as libarchive
 import settings
 
 DATASET_PATH = settings.DATASET_PATH
-CACHE_PATH = os.path.join(DATASET_PATH, 'so')
 DATASET_PARTS = {
     'Comments', 'PostHistory', 'PostLinks', 'Posts', 'Tags', 'Users', 'Votes'}
 
@@ -31,7 +30,7 @@ def get_fname(dataset_part):
     assert dataset_part in DATASET_PARTS, "Unexpected SO dataset part"
     # Workaround for libarchive bug: replace later
     return os.path.join(DATASET_PATH, "%s.xml.gz" % dataset_part)
-    return os.path.join(DATASET_PATH, "stackoverflow.com-%s.7z" % dataset_part)
+    # return os.path.join(DATASET_PATH, "stackoverflow.com-%s.7z" % dataset_part)
 
 
 def get_mtime(dataset_part):
