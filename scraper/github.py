@@ -179,12 +179,13 @@ class API(object):
 
     @staticmethod
     def activity(repo_name):
+        url = "https://github.com/%s/graphs/contributors" % repo_name
         headers = {
             'X-Requested-With': 'XMLHttpRequest',
             'Accept-Encoding': "gzip,deflate,br",
             'Accept': "application/json",
             'Origin': 'https://github.com',
-            'Referer': "https://github.com/django/django/graphs/contributors",
+            'Referer': url,
             "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:53.0) "
                           "Gecko/20100101 Firefox/53.0",
             "Host": 'github.com',
@@ -192,7 +193,6 @@ class API(object):
             "Connection": "keep-alive",
             "Cache-Control": 'max-age=0',
         }
-        url = "https://github.com/%s/graphs/contributors" % repo_name
         cookies = requests.get(url).cookies
         r = requests.get(url + "-data", cookies=cookies, headers=headers)
         r.raise_for_status()
