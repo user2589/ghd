@@ -20,6 +20,11 @@ class Command(BaseCommand):
         logger = logging.getLogger('ghd.so')
         logger.setLevel(40 - 10*options['verbosity'])
 
-        logger.warning("Note: it will take 4..5 hours to execute")
+        # download: 2 hours
+        # convert to .tgz: 1 hour
+        # processing: 4..5 hours
+        logger.warning("This script will take 4..5 hours to run, plus couple "
+                       "more hours if dataset is not downloaded yet. Lean back "
+                       "and relax")
 
         utils.question_stats().to_csv(options['output'])

@@ -86,12 +86,12 @@ def get_path(dataset_part, update=True):
     if not os.path.isfile(fname) or update and is_stale(dataset_part):
         logger.info('StackOverflow %s are stalled, refreshing', dataset_part)
         filename7z = os.path.join(DATASET_PATH, "stackoverflow.com-%s.7z" % dataset_part)
-        if not os.path.isfile(fname):
+        if os.path.isfile(fname):
             os.unlink(filename7z)
-            url = "https://archive.org/download/stackexchange/" \
-                  "stackoverflow.com-%s.7z" % dataset_part
-            logger.info('downloading %s -> %s...', url, fname)
-            urllib.urlretrieve(url, filename7z)
+        url = "https://archive.org/download/stackexchange/" \
+              "stackoverflow.com-%s.7z" % dataset_part
+        logger.info('downloading %s -> %s...', url, fname)
+        urllib.urlretrieve(url, filename7z)
 
         # Workaround for a libarchive bug - convert to .gz
         # https://github.com/libarchive/libarchive/issues/913
