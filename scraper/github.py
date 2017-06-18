@@ -2,8 +2,18 @@
 import requests
 import time
 import json
+from collections import defaultdict
 
-import settings
+try:
+    import settings
+except ImportError:
+    settings = object()
+
+_tokens = getattr(settings, "SCRAPER_GITHUB_API_TOKENS", [])
+
+
+class RepoDoesNotExist(requests.HTTPError):
+    pass
 
 
 class API(object):
@@ -23,8 +33,10 @@ class API(object):
             cls._instance = super(API, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
-    def __init__(self, tokens=None):
-        tokens = tokens or settings.SCRAPER_GITHUB_API_TOKENS
+    def __init__(self, tokens=_tokens):
+        if not tokens:
+            raise EnvironmentError("No GitHub API tokens found in settings.py."
+                                   "Please add some.")
         self.tokens = {t: (None, None) for t in tokens}
 
     def _request(self, url, method='get', data=None, **params):
@@ -45,6 +57,11 @@ class API(object):
                     if r.status_code == 403 and remaining == 0:
                         continue  # retry with another token
 
+                if r.status_code == 404:
+                    raise RepoDoesNotExist
+                elif r.status_code == 409:
+                    # repository is empty https://developer.github.com/v3/git/
+                    return []
                 r.raise_for_status()
                 return r.json()
 
@@ -60,24 +77,43 @@ class API(object):
         payload = json.dumps({"query": query, "variables": params})
         return self._request(self.api_v4_url, 'post', payload)
 
+    def check_limits(self):
+        for token in self.tokens:
+            r = requests.get(self.api_url,
+                             headers={"Authorization": "token " + token})
+            if 'X-RateLimit-Remaining' in r.headers:
+                remaining = int(r.headers['X-RateLimit-Remaining'])
+                reset_time = int(r.headers['X-RateLimit-Reset'])
+            else:
+                remaining = 0
+                reset_time = None  # prevent from using
+            self.tokens[token] = (remaining, reset_time)
+
+        return self.tokens
+
     def repo_issues(self, repo_name, page=None):
         url = "repos/%s/issues" % repo_name
         page = page or 1
         while True:
-            data = self.v3(url, per_page=100, page=page, state='all')
+            try:
+                data = self.v3(url, per_page=100, page=page, state='all')
+            except RepoDoesNotExist:  # repository not found
+                break
+
             if not data:
                 break
 
             for issue in data:
-                yield {
-                    'author': issue['user']['login'],
-                    'closed': issue['state'] != "open",
-                    'created_at': issue['created_at'],
-                    'updated_at': issue['updated_at'],
-                    'closed_at': issue['closed_at'],
-                    'number': issue['number'],
-                    'title': issue['title']
-                }
+                if 'pull_request' not in issue:
+                    yield {
+                        'author': issue['user']['login'],
+                        'closed': issue['state'] != "open",
+                        'created_at': issue['created_at'],
+                        'updated_at': issue['updated_at'],
+                        'closed_at': issue['closed_at'],
+                        'number': issue['number'],
+                        'title': issue['title']
+                    }
             page += 1
 
     def repo_issues_v4(self, repo_name, cursor=None):
@@ -95,7 +131,7 @@ class API(object):
         while True:
             data = self.v4(query, owner=owner, repo=repo, cursor=cursor
                            )['data']['repository']
-            if not data:  # repository deleted or moved
+            if not data:  # repository is empty, deleted or moved
                 break
 
             for issue in data["issues"]:
@@ -118,7 +154,11 @@ class API(object):
         url = "repos/%s/commits" % repo_name
         page = page or 1
         while True:
-            data = self.v3(url, per_page=100, page=page)
+            try:
+                data = self.v3(url, per_page=100, page=page)
+            except RepoDoesNotExist:
+                break
+
             if not data:
                 # no commits or page is too high. Last call could be saved  by
                 # checking response.headers['Link'], but it'll violate the
@@ -126,12 +166,13 @@ class API(object):
                 break
 
             for commit in data:
+                author = commit['commit'].get('author') or {}
                 yield {
                     'sha': commit['sha'],
-                    'author': commit['author']['login'],
-                    'author_name': commit['commit']['author']['name'],
-                    'author_email': commit['commit']['author']['email'],
-                    'authored_date': commit['commit']['author']['date'],
+                    'author': author.get('login'),
+                    'author_name': author.get('name'),
+                    'author_email': author.get('email'),
+                    'authored_date': author.get('date'),
                     'message': commit['commit']['message'],
                     'committed_date': commit['commit']['committer']['date'],
                     'parents': "\n".join(p['sha'] for p in commit['parents']),

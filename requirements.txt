@@ -1,19 +1,26 @@
+# ===========================
 # COMMON DEPENDENCIES
+# ===========================
 requests
 django>=1.10
-# libarchive requires sudo apt-get install libarchive-dev
-# temporary disabled because of https://github.com/libarchive/libarchive/issues/913
-# libarchive
-
-# SCRAPER
-
-# STACKOVERFLOW
+psycopg2
+matplotlib
 pandas
 numpy
 
+# ===========================
+# STACKOVERFLOW
+# ===========================
+# libarchive requires sudo apt-get install libarchive-dev
+libarchive
 
+
+# ===========================
 # GHTORRENT
+# ===========================
+# the whole package is deprecated
 
-
+# ===========================
 # PYPI
+# ===========================
 # requires docker: sudo apt-get install docker-compose

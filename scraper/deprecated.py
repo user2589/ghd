@@ -4,14 +4,17 @@ import datetime
 import re
 
 
-def unix2str(timestamp, fmt="%Y-%m-%d %H:%M"):
-    dt = datetime.datetime.fromtimestamp(timestamp)
+def timestamp2str(timestamp):
+    return datetime2str(datetime.datetime.fromtimestamp(timestamp))
+
+
+def datetime2str(dt, fmt="%Y-%m-%d %H:%M"):
     return dt.strftime(fmt)
 
 
-def utf8fy(str):
+def utf8fy(string):
     try:
-        return str.encode('utf8')
+        return string.encode('utf8')
     except UnicodeDecodeError:
         return '*Garbled*'
 
@@ -40,20 +43,14 @@ def commits_gitpython(repo_path, ref='master', short_message=False):
 
         yield {
             'sha': commit.hexsha,
-            'deletions': commit.stats.total['deletions'],
-            'insertions': commit.stats.total['insertions'],
-            'lines': commit.stats.total['lines'],
-            'files': commit.stats.total['files'],
-            'author.name': hasauthor and utf8fy(commit.author.name),
-            'author.email': hasauthor and utf8fy(commit.author.email),
-            'authored.unixts': hasauthor and commit.authored_date,
-            'authored.date': hasauthor and unix2str(commit.authored_date),
-            'committer.name': utf8fy(commit.committer.name),
-            'committer.email': utf8fy(commit.committer.email),
-            'committed.unixts': hasdate and commit.committed_date,
-            'committed.date': hasdate and unix2str(commit.committed_date),
+            'author_name': hasauthor and utf8fy(commit.author.name),
+            'author_email': hasauthor and utf8fy(commit.author.email),
+            'authored_date': hasauthor and timestamp2str(commit.authored_date),
+            'committer_name': utf8fy(commit.committer.name),
+            'committer_email': utf8fy(commit.committer.email),
+            'committed_date': hasdate and timestamp2str(commit.committed_date),
             'message': utf8fy(message),
-            'compressed.size': commit.size
+            'parents': commit.parents
         }
 
 
@@ -86,29 +83,15 @@ def commits_pygit2(repo_url, remove=True):
     try:
         for commit in repo.walk(repo.head.target):
             # http://www.pygit2.org/objects.html#commits
-            deletions = insertions = files = None
-            fstats = []  # detailed per-file delta stats
-            if len(commit.parent_ids) == 1:
-                diff = repo.diff(str(commit.oid), str(commit.parent_ids[0]))
-                diff.find_similar()  # handle renamed files
-                deletions = diff.stats.deletions
-                insertions = diff.stats.insertions
-                files = diff.stats.files_changed
-                fstats = {p.delta.new_file.path: p.line_stats
-                          for p in list(diff)}  # ?, ins, del
             yield {
                 'sha': commit.oid,
-                'author': commit.author.name,
+                'author_name': commit.author.name,
                 'author_email': commit.author.email,
-                'committer': commit.committer.name,
+                'committer_name': commit.committer.name,
                 'committer_email': commit.committer.email,
                 'message': commit.message.strip(),
                 'parent_ids': "\n".join(str(pid) for pid in commit.parent_ids),
                 'time': commit.commit_time,
-                'del': deletions,
-                'ins': insertions,
-                'files': files,
-                'fstats': fstats,
             }
     finally:
         if remove:
