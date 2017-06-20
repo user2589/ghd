@@ -2,7 +2,6 @@
 import requests
 import time
 import json
-from collections import defaultdict
 
 try:
     import settings
@@ -21,22 +20,23 @@ class API(object):
     limits after every request. Actual work is done by outside classes, such
     as _IssueIterator and _CommitIterator
     """
-    _instance = None
+    _instance = None  # instance of API() for Singleton pattern implementation
     api_url = "https://api.github.com/"
     api_v4_url = api_url + "graphql"
 
     tokens = None  # token: remaining limit, reset timestamp
 
-    def __new__(cls, *args, **kwargs):
+    def __new__(cls):
         # basic Singleton implementation
         if not isinstance(cls._instance, cls):
-            cls._instance = super(API, cls).__new__(cls, *args, **kwargs)
+            cls._instance = super(API, cls).__new__(cls)
         return cls._instance
 
-    def __init__(self, tokens=_tokens):
+    def __init__(self, tokens=_tokens, timeout=30):
         if not tokens:
             raise EnvironmentError("No GitHub API tokens found in settings.py."
                                    "Please add some.")
+        self.timeout = timeout
         self.tokens = {t: (None, None) for t in tokens}
 
     def _request(self, url, method='get', data=None, **params):
@@ -47,8 +47,12 @@ class API(object):
                     continue  # try another token
                 # Exact API version can be specified by Accept header:
                 # "Accept": "application/vnd.github.v3+json"}
-                r = requests.request(method, url, data=data, params=params,
-                                     headers={"Authorization": "token " + token})
+                try:
+                    r = requests.request(
+                        method, url, params=params, timeout=self.timeout,
+                        data=data, headers={"Authorization": "token " + token})
+                except requests.exceptions.Timeout:
+                    continue  # i.e. try again
 
                 if 'X-RateLimit-Remaining' in r.headers:
                     remaining = int(r.headers['X-RateLimit-Remaining'])
@@ -57,7 +61,7 @@ class API(object):
                     if r.status_code == 403 and remaining == 0:
                         continue  # retry with another token
 
-                if r.status_code == 404:
+                if r.status_code == 404:  # API v3 only
                     raise RepoDoesNotExist
                 elif r.status_code == 409:
                     # repository is empty https://developer.github.com/v3/git/
@@ -91,9 +95,8 @@ class API(object):
 
         return self.tokens
 
-    def repo_issues(self, repo_name, page=None):
+    def repo_issues(self, repo_name, page=1):
         url = "repos/%s/issues" % repo_name
-        page = page or 1
         while True:
             try:
                 data = self.v3(url, per_page=100, page=page, state='all')
@@ -150,9 +153,8 @@ class API(object):
             if not data["issues"]["pageInfo"]["hasNextPage"]:
                 break
 
-    def repo_commits(self, repo_name, page=None):
+    def repo_commits(self, repo_name, page=1):
         url = "repos/%s/commits" % repo_name
-        page = page or 1
         while True:
             try:
                 data = self.v3(url, per_page=100, page=page)
