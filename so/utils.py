@@ -3,7 +3,7 @@ from __future__ import print_function
 
 import os
 import re
-import csv  # pd.read_csv doesn't work for large files
+import csv  # pd.read_csv() doesn't work for large files, like adjacency matrix
 import datetime
 import requests
 import urllib

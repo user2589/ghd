@@ -12,11 +12,11 @@ from django.core.management.base import BaseCommand
 from scraper import utils
 
 logging.basicConfig()
-logger = logging.getLogger('ghd.so')
+logger = logging.getLogger('ghd.scraper')
 
 
 def collect(package):
-    logger.info("Processing", package['name'], package['github_url'])
+    logger.info("Processing %s %s", package['name'], package['github_url'])
     utils.open_issues(package['github_url'])
     utils.commit_stats(package['github_url'])
 

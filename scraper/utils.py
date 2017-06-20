@@ -7,43 +7,17 @@ import numpy as np
 
 import settings
 from scraper import github
+import common
 
 # TODO: number of contributors with different windows
 # TODO: percentage of core dev contributions with different windows
 
 CACHE_PERIOD = getattr(settings, 'SCRAPER_CACHE_PERIOD', 3600 * 24 * 30 * 3)
-CACHE_PATH = os.path.join(settings.DATASET_PATH, "scraper")
-if not os.path.isdir(CACHE_PATH):
-    os.mkdir(CACHE_PATH)
-CACHE_TYPES = {'raw': None, 'aggregate': None}
-for t in CACHE_TYPES:
-    path = os.path.join(CACHE_PATH, t)
-    if not os.path.isdir(path):
-        os.mkdir(path)
-    CACHE_TYPES[t] = path
+CACHE_TYPES = {'raw', 'aggregate'}
 
 github_api = github.API()
 
-
-def scraper_cache(cache_type):
-    assert cache_type in CACHE_TYPES
-
-    def decorator(func):
-        def wrapper(*args):
-            cache_fname = ".".join([
-                "_".join([arg.replace("/", ".") for arg in args]),
-                func.__name__, "csv"])
-            cache_fpath = os.path.join(CACHE_TYPES[cache_type], cache_fname)
-            if os.path.isfile(cache_fpath):
-                if time.time() - os.path.getmtime(cache_fpath) < CACHE_PERIOD:
-                    return pd.read_csv(cache_fpath, index_col=0)
-
-            df = func(*args)
-            df.to_csv(cache_fpath)
-            return df
-
-        return wrapper
-    return decorator
+scraper_cache = common.cache('scraper', CACHE_TYPES, CACHE_PERIOD)
 
 
 @scraper_cache('raw')
