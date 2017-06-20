@@ -1,6 +1,7 @@
 # ===========================
 # COMMON DEPENDENCIES
 # ===========================
+typing
 requests
 django>=1.10
 psycopg2

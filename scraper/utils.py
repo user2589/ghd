@@ -22,6 +22,7 @@ scraper_cache = common.cache('scraper', CACHE_TYPES, CACHE_PERIOD)
 
 @scraper_cache('raw')
 def commits(repo_name):
+    # type: (str) -> pd.DataFrame
     return pd.DataFrame(
         github_api.repo_commits(repo_name),
         columns=['sha', 'author', 'author_name', 'author_email', 'authored_date',
@@ -30,6 +31,7 @@ def commits(repo_name):
 
 @scraper_cache('aggregate')
 def commit_stats(repo_name):
+    # type: (str) -> pd.DataFrame
     """Commits aggregated by month"""
     column = 'authored_date'
     df = commits(repo_name)[[column]]
@@ -39,6 +41,7 @@ def commit_stats(repo_name):
 
 @scraper_cache('raw')
 def issues(repo_name):
+    # type: (str) -> pd.DataFrame
     return pd.DataFrame(
         github_api.repo_issues(repo_name),
         columns=['number', 'author', 'closed', 'created_at', 'updated_at',
@@ -47,6 +50,7 @@ def issues(repo_name):
 
 @scraper_cache('aggregate')
 def new_issues(repo_name):
+    # type: (str) -> pd.DataFrame
     """New issues aggregated by month"""
     column = 'created_at'
     df = issues(repo_name)
@@ -56,6 +60,7 @@ def new_issues(repo_name):
 
 @scraper_cache('aggregate')
 def open_issues(repo_name):
+    # type: (str) -> pd.DataFrame
     """Open issues aggregated by month"""
     df = issues(repo_name)
     column = 'closed_at'
@@ -68,5 +73,3 @@ def open_issues(repo_name):
     df = pd.concat([closed, new], axis=1).fillna(0).cumsum()
     df['open_issues'] = df['new_issues'] - df['closed_issues']
     return df[['open_issues']].astype(np.int)
-
-

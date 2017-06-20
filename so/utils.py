@@ -15,6 +15,7 @@ import gzip  # workaround for libarchive
 import pandas as pd
 import numpy as np
 import libarchive.public as libarchive
+from typing import Optional
 
 import settings
 
@@ -34,6 +35,7 @@ def get_fname(dataset_part):
 
 
 def get_mtime(dataset_part):
+    # type: (str) -> Optional[str]
     """Return modification time of corresponding StackOverflow dataset part or
     None if file does not exist. This method is used to check if dataset needs
     to be updated
@@ -46,6 +48,7 @@ def get_mtime(dataset_part):
 
 
 def online_ver():
+    # type: () -> Optional[str]
     """Get last available version of StackOverflow Archive
     This method parses dataset page on archive.org and thus requires Internet
     connection"""
@@ -63,6 +66,7 @@ def online_ver():
 
 
 def is_stale(dataset_part):
+    # type: (str) -> bool
     """Check if dataset part is out of date."""
     mtime = get_mtime(dataset_part)
     if mtime is None:
@@ -80,6 +84,7 @@ def is_stale(dataset_part):
 
 
 def get_path(dataset_part, update=True):
+    # type: (str, bool) -> str
     """Get path to the dataset part. This method will automatically update the
     data if a newer version is available."""
     fname = get_fname(dataset_part)
@@ -101,30 +106,6 @@ def get_path(dataset_part, update=True):
 
         logger.info('..done')
     return fname
-
-
-def parse(parserobj):
-    """Get dataset part and process contained archive by specified SAX parser"""
-    dataset_part = parserobj.dataset_part
-    xml_parser = xml.sax.make_parser(['xml.sax.xmlreader.IncrementalParser'])
-    sax_parser = parserobj()
-    xml_parser.setContentHandler(sax_parser)
-
-    fname = get_path(dataset_part)
-    if fname.endswith('7z'): # use libarchive
-        entry_fname = dataset_part + '.xml'
-        with libarchive.file_reader(fname) as archive:
-            for entry in archive:
-                if str(entry) == entry_fname:
-                    for block in entry.get_blocks():
-                        xml_parser.feed(block)
-                    xml_parser.close()
-    elif fname.endswith('gz'):
-        stream = gzip.open(fname)
-        xml_parser.parse(stream)
-    else:
-        raise ValueError('The provided file format is not supported')
-    return sax_parser
 
 
 def iNone(attr):
@@ -221,6 +202,31 @@ class SOHandler(xml.sax.ContentHandler):
         return self.parse(attrs)
 
 
+def parse(parserobj):
+    # type: (type) -> SOHandler
+    """Get dataset part and process contained archive by specified SAX parser"""
+    dataset_part = parserobj.dataset_part
+    xml_parser = xml.sax.make_parser(['xml.sax.xmlreader.IncrementalParser'])
+    sax_parser = parserobj()
+    xml_parser.setContentHandler(sax_parser)
+
+    fname = get_path(dataset_part)
+    if fname.endswith('7z'): # use libarchive
+        entry_fname = dataset_part + '.xml'
+        with libarchive.file_reader(fname) as archive:
+            for entry in archive:
+                if str(entry) == entry_fname:
+                    for block in entry.get_blocks():
+                        xml_parser.feed(block)
+                    xml_parser.close()
+    elif fname.endswith('gz'):
+        stream = gzip.open(fname)
+        xml_parser.parse(stream)
+    else:
+        raise ValueError('The provided file format is not supported')
+    return sax_parser
+
+
 class TagReader(SOHandler):
     """Class to generate list of tags. It is not supposed to be used directly,
     call tags() instead"""
@@ -256,7 +262,7 @@ class PostReader(SOHandler):
         # tags() will check whether the dataset is stalled, so at this
         # point Tags mtime is up to date
         columns = [ts.strftime("%Y-%m") for ts in
-                   pd.date_range('2008-07-1', get_mtime('Tags'), freq='M')][:-1]
+                   pd.date_range('2008-07-1', get_mtime('Tags'), freq='M')]
         self.stats = pd.DataFrame(0, columns=columns, index=idx, dtype=np.int32)
         SOHandler.__init__(self)
 
@@ -265,12 +271,17 @@ class PostReader(SOHandler):
         if post is None or not post['question']:
             return
         month = post['created_at'][:7]
+        # if month not in self.stats:
+        #     self.stats[month] = 0
         for tag in post['tags']:  # questions have at least one tag
+            # if tag not in self.stats.index:
+            #     continue
             self.stats.loc[tag, month] += 1
             self.stats.loc['ALL', month] += 1
 
 
 def question_stats():
+    # type: () -> pd.DataFrame
     """Get Pandas dataframe with monthly question statistics. Index is tags,
     columns are months in %Y-%m format"""
     return parse(PostReader).stats
@@ -301,10 +312,12 @@ class AdjacencyHandler(SOHandler):
 
 
 def adjacency_matrix():
+    # type: () -> pd.DataFrame
     return parse(AdjacencyHandler).matrix
 
 
 def read_adjacency_matrix(fname):
+    # type: (str) -> pd.DataFrame
     reader = csv.reader(open(fname))
     names = reader.next()[1:]
     # somehow float assignment + int conversion is faster

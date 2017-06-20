@@ -2,6 +2,7 @@
 import requests
 import time
 import json
+from typing import Iterable
 
 try:
     import settings
@@ -40,6 +41,7 @@ class API(object):
         self.tokens = {t: (None, None) for t in tokens}
 
     def _request(self, url, method='get', data=None, **params):
+        # type: (str, str, str) -> dict
         """ Generic, API version agnostic request method """
         while True:
             for token, (remaining, reset_time) in self.tokens.items():
@@ -65,7 +67,7 @@ class API(object):
                     raise RepoDoesNotExist
                 elif r.status_code == 409:
                     # repository is empty https://developer.github.com/v3/git/
-                    return []
+                    return {}
                 r.raise_for_status()
                 return r.json()
 
@@ -75,13 +77,16 @@ class API(object):
                 time.sleep(sleep)
 
     def v3(self, url, method='get', data=None, **params):
+        # type: (str, str, str) -> Iterable[dict]
         return self._request(self.api_url + url, method, data, **params)
 
     def v4(self, query, **params):
+        # type: (str) -> Iterable[dict]
         payload = json.dumps({"query": query, "variables": params})
         return self._request(self.api_v4_url, 'post', payload)
 
     def check_limits(self):
+        # type: () -> dict
         for token in self.tokens:
             r = requests.get(self.api_url,
                              headers={"Authorization": "token " + token})
@@ -96,6 +101,7 @@ class API(object):
         return self.tokens
 
     def repo_issues(self, repo_name, page=1):
+        # type: (str, int) -> Iterable[dict]
         url = "repos/%s/issues" % repo_name
         while True:
             try:
@@ -120,6 +126,7 @@ class API(object):
             page += 1
 
     def repo_issues_v4(self, repo_name, cursor=None):
+        # type: (str, str) -> Iterable[dict]
         owner, repo = repo_name.split("/")
         query = """query ($owner: String!, $repo: String!, $cursor: String) {
         repository(name: $repo, owner: $owner) {
@@ -154,6 +161,7 @@ class API(object):
                 break
 
     def repo_commits(self, repo_name, page=1):
+        # type: (str, int) -> Iterable[dict]
         url = "repos/%s/commits" % repo_name
         while True:
             try:
@@ -183,6 +191,7 @@ class API(object):
             page += 1
 
     def repo_commits_v4(self, repo_name, cursor=None):
+        # type: (str, str) -> Iterable[dict]
         """As of June 2017 GraphQL API does not allow to get commit parents
         Until this issue is fixed this method is only left for a reference
         Please use commits() instead"""
@@ -222,6 +231,7 @@ class API(object):
 
     @staticmethod
     def activity(repo_name):
+        # type: (str) -> dict
         url = "https://github.com/%s/graphs/contributors" % repo_name
         headers = {
             'X-Requested-With': 'XMLHttpRequest',
