@@ -2,7 +2,6 @@
 
 from __future__ import unicode_literals, print_function
 
-import os
 import argparse
 import random
 import csv
@@ -11,78 +10,28 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
-import common
-from scraper import utils
+from common import utils
+from so import utils as so_utils
 
 #     commits + SO + issues
 #     same + developers
 #     same + 2 classes of developers
 # TODO: developers / window - try for several repositories?
 
-# TODO: replace with automatic detection using so.utils.* and deployment ver
-LAST_DEPLOYMENT = '2017-02'  # limited by StackOverflow dataset
+from statsmodels import api
 
 # constants
-# TODO: set up permanent so cache path
-SO_STATS = pd.read_csv('so_stats.csv', index_col=0)
-# CACHE_PATH = os.path.join(settings.DATASET_PATH, 'trajectories_cache')
+SO_STATS = so_utils.question_stats()
 COLUMNS = {'commits', 'new_issues', 'open_issues', 'so', 'time'}
 
 # repository criteria
 DATE_RANGE = ('2008-01', '2014-01')
 CORR = pd.DataFrame()
 
-trajectories_cache = common.cache('trajectories')
-
-
-def _get_corr(language):
-    fname = 'so_corr_%s.csv' % language.lower()
-    if os.path.isfile(fname):
-        return pd.read_csv(fname, index_col=0)
-    from so import utils as so_utils
-    df = so_utils.read_adjacency_matrix('so_adjacency.csv')
-    counts = pd.DataFrame(np.diag(df.values), index=df.index)
-    # some tags have zero counts, so we need to fillna()
-    corr = (df.loc[language] / counts).fillna(0)
-    corr.to_csv(fname, float_format="%.2g")
-    return corr
-
-
-@trajectories_cache()
-def _get_data(package_name, repo_name, language=""):
-    # type: (str, str, str) -> pd.DataFrame
-    df = pd.concat([
-        utils.commit_stats(repo_name),  # 'commits'
-        utils.new_issues(repo_name),    # 'new_issues'
-        utils.open_issues(repo_name),   # 'open_issues'
-    ], axis=1)
-    # not using r.r.language-pkgname because without r we don't know the tag
-    lname = language and language + "-" + package_name
-    so_name = lname if lname and lname in SO_STATS.index else package_name
-
-    if so_name in SO_STATS.index:
-        try:
-            df['so'] = SO_STATS.loc[so_name, df.index]
-        except KeyError:
-            # two series don't intersect,
-            # e.g. development was started after LAST_DEPLOYMENT
-            pass
-    if 'so' not in df:
-        df['so'] = 0
-    if df.empty:
-        return df
-
-    idx = [d.strftime("%Y-%m") for d in pd.date_range(
-        period='M', start=min(df.index), end=min(max(df.index), LAST_DEPLOYMENT))]
-
-    df = pd.concat([pd.DataFrame(index=idx), df], axis=1)
-    df['open_issues'] = df['open_issues'].fillna(method='ffill')
-    return df.loc[df.index <= LAST_DEPLOYMENT].fillna(0).astype(np.int)
-
 
 def get_data(package_name, repo_name, columns, language,
              smoothing=6, threshold=0):
-    data = _get_data(package_name, repo_name, language)
+    data = utils.get_data(package_name, repo_name, language)
 
     # validation checks
     if data is None or data.empty:
@@ -114,35 +63,38 @@ def get_data(package_name, repo_name, columns, language,
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="TBA")
+        description="A script to visualize sustainability metrics")
+    parser.add_argument('x', default='commits', choices=COLUMNS,
+                        help='X axis metric, commits by default')
+    parser.add_argument('y', default='new_issues', choices=COLUMNS,
+                        help='Y axis metric, new issues by default')
     parser.add_argument('-i', '--input', default="-",
                         type=argparse.FileType('r'),
                         help='File to use as input, empty or "-" for stdin')
     parser.add_argument('-o', '--output', default="",
                         help='Output filename.png')
-    parser.add_argument('-x', default='commits', choices=COLUMNS,
-                        help='X axis metric, commits by default')
-    parser.add_argument('-y', default='new_issues', choices=COLUMNS,
-                        help='Y axis metric, new issues by default')
     parser.add_argument('-z', nargs="?", choices=COLUMNS,
                         help='Z axis metric, not used by default')
-    parser.add_argument('-t', '--title', type=str,
+    parser.add_argument('-t', '--threshold', default=0, type=int,
+                        help='Lower bound of project activity to display, '
+                             '0 by default')
+    parser.add_argument("-d", "--dropout", default=0, type=float,
+                        help='Share of projects to skip randomly, [0..1), '
+                             '0 by default.')
+    parser.add_argument('-s', '--smoothing', default=6, type=int,
+                        help='Smoothing window in month, 6 by default')
+    parser.add_argument('--title', type=str,
                         help='Plot title, default blank')
+    parser.add_argument("-l", "--log", default='',
+                        help='Axes to apply log scale, none by default, eg. xy.'
+                             ' Log is never applied to time scale.')
+    parser.add_argument('-c', '--clusters', default="", nargs='?',
+                        help='Pandas csv with numeric classes for coloring')
     parser.add_argument('-a', '--annotate', action='store_true',
                         help='Add annotations')
     parser.add_argument('--nc', action='store_true',
                         help='Use momentary values instead of cumulative sum.'
                              'Open issues are always non-cumulative.')
-    parser.add_argument("-l", "--log", default='',
-                        choices=('', 'x', 'y', 'z', 'all'),
-                        help='Axes to apply log scale, none by default. '
-                             'Log is never applied to time scale.')
-    parser.add_argument("-d", "--dropout", default=0, type=float,
-                        help='Share of projects to skip randomly, 0..1, '
-                             '0 by default.')
-    parser.add_argument('--threshold', default=0, type=int,
-                        help='Lower bound of project activity to display, '
-                             '0 by default')
     parser.add_argument('--figsize', default=12, type=int,
                         help='Figure size in inches, 12 by default')
     parser.add_argument('--marker', default=".", help='Matplotlib marker shape')
@@ -153,57 +105,49 @@ if __name__ == "__main__":
                         help='Language to check against on StackOverflow')
     args = parser.parse_args()
 
+    default_color = None
+    if args.clusters:
+        clusters = pd.read_csv(args.clusters, index_col=0)
+        colors = {None: '', 0: 'r', 1: 'b'}
+
+        def color(pkgname):
+            if pkgname not in clusters.index:
+                return default_color
+            cls = clusters.loc[pkgname][0]
+            if cls is None or np.isnan(cls):
+                return default_color
+            return "C%d" % cls
+    else:
+        def color(pkgname):
+            return default_color
+
     lang = args.language
-    CORR = _get_corr(lang)
-    if args.log == 'all':
-        args.log = 'xyz' if args.z else 'xy'
+    if lang:
+        CORR = so_utils.correlation(lang)
+    columns = {'x': args.x, 'y': args.y, 'z': args.z}
 
     fig_xsize = args.figsize if args.z else args.figsize * 3 // 2
     figure_params = {'figsize': (fig_xsize, args.figsize)}
     plot_params = {'marker': args.marker, 'ms': args.marker_size}
-    fig = plt.figure(**figure_params)
 
-    columns = {
-        'x': args.x,
-        'y': args.y,
-        'z': args.z
-    }
+    if args.log == 'all':
+        args.log = 'xyz'
+    args.log = "".join(c for c in args.log if columns[c] not in (None, 'time'))
 
-    if columns['z']:
-        from mpl_toolkits.mplot3d import Axes3D
+    ax = utils.Plot(args.title, columns['x'], columns['y'], columns['z'],
+                    figure_params, plot_params, log=args.log)
 
-        ax = fig.add_subplot(111, projection='3d')
-        ax.set_xlabel(columns['x'].replace("_", " "))
-        ax.set_ylabel(columns['y'].replace("_", " "))
-        ax.set_zlabel(columns['z'].replace("_", " "))
-    else:
-        plt.xlabel(columns['x'].replace("_", " "))
-        plt.ylabel(columns['y'].replace("_", " "))
-        ax = fig.add_subplot(111)
-
-    if hasattr(args, 'title'):
-        plt.title(args.title)
-
-    draw_func = {
-        'xyz': ax.loglog,
-        'xy': ax.loglog,
-        'x': ax.semilogx,
-        'y': ax.semilogy,
-        '': ax.plot
-    }
-    draw = draw_func["".join(c for c in args.log if columns[c] != "time")]
     reader = csv.DictReader(args.input)
-    DEBUG = False
-    if DEBUG:
-        reader = [{'name': 'pandas', 'github_url': "pandas-dev/pandas"}]
-        args.dropout = 0
 
     for record in reader:
+        if args.clusters and record['name'] not in clusters.index:
+            continue
+
         if not record['github_url']:
             continue
 
-        data = get_data(record['name'], record['github_url'],
-                        columns.values(), lang, threshold=args.threshold)
+        data = get_data(record['name'], record['github_url'], columns.values(),
+                        lang, args.smoothing, args.threshold)
 
         if data is None:
             continue
@@ -219,24 +163,20 @@ if __name__ == "__main__":
         if 'time' in columns.values():
             data['time'] = np.arange(len(data))
 
-        for c in 'xyz':
-            if columns[c] and (c in args.log or args.log == 'all') \
-                    and columns[c] != 'time':
-                data[columns[c]] += 1
+        for c in args.log:
+            data[columns[c]] += 1
 
+        c = color(record['name'])
         print("Processing", record['name'], record['github_url'])
-        if columns['z']:
-            ax.plot(data[columns['x']], -data[columns['y']], data[columns['z']],
-                    **plot_params)
-        else:
-            draw(data[columns['x']], data[columns['y']], **plot_params)
-        if args.annotate:
-            xy = (data.iloc[-1][columns['x']], data.iloc[-1][columns['y']])
-            ax.annotate(record['name'], xy=xy)
-        plt.pause(0.0001)
+        annotation = args.annotate and record['name']
+
+        ax.plot(*(data[columns[c]] for c in 'xyz' if columns[c]),
+                annotation=annotation,
+                # c=colors[int(bool(record['downstream']))])
+                c=c)
 
     print("Done. Press any key to continue..")
     plt.waitforbuttonpress()
 
     if args.output:
-        plt.savefig(args.output, bbox_inches='tight')
+        ax.save(args.output)

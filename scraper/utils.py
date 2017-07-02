@@ -1,23 +1,15 @@
 
-import os
-import time
-
 import pandas as pd
 import numpy as np
 
-import settings
 from scraper import github
-import common
+from common import decorators
 
 # TODO: number of contributors with different windows
 # TODO: percentage of core dev contributions with different windows
 
-CACHE_PERIOD = getattr(settings, 'SCRAPER_CACHE_PERIOD', 3600 * 24 * 30 * 3)
-CACHE_TYPES = {'raw', 'aggregate'}
-
 github_api = github.API()
-
-scraper_cache = common.cache('scraper', CACHE_TYPES, CACHE_PERIOD)
+scraper_cache = decorators.typed_fs_cache('scraper')
 
 
 @scraper_cache('raw')
@@ -35,8 +27,10 @@ def commit_stats(repo_name):
     """Commits aggregated by month"""
     column = 'authored_date'
     df = commits(repo_name)[[column]]
-    return df.groupby(df[column].str[:7]).count().rename(
+    df = df.groupby(df[column].str[:7]).count().rename(
         columns={column: 'commits'}).astype(np.int)
+    # filter out first commits without date (1970-01-01)
+    return df.loc[df.index > '2005']
 
 
 @scraper_cache('raw')

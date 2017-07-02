@@ -11,19 +11,23 @@ import xml.sax
 import logging
 import subprocess
 import gzip  # workaround for libarchive
+import time
+import datetime
 
 import pandas as pd
 import numpy as np
 import libarchive.public as libarchive
 from typing import Optional
 
-import settings
+from common import decorators as d
 
-DATASET_PATH = settings.DATASET_PATH
+DATASET_PATH = d.DATASET_PATH
 DATASET_PARTS = {
     'Comments', 'PostHistory', 'PostLinks', 'Posts', 'Tags', 'Users', 'Votes'}
-
+_online_ver = None
 logger = logging.getLogger('ghd.so')
+
+so_cache = d.fs_cache('so')
 
 
 def get_fname(dataset_part):
@@ -96,6 +100,7 @@ def get_path(dataset_part, update=True):
         url = "https://archive.org/download/stackexchange/" \
               "stackoverflow.com-%s.7z" % dataset_part
         logger.info('downloading %s -> %s...', url, fname)
+        print(url, filename7z)
         urllib.urlretrieve(url, filename7z)
 
         # Workaround for a libarchive bug - convert to .gz
@@ -280,6 +285,7 @@ class PostReader(SOHandler):
             self.stats.loc['ALL', month] += 1
 
 
+@so_cache
 def question_stats():
     # type: () -> pd.DataFrame
     """Get Pandas dataframe with monthly question statistics. Index is tags,
@@ -316,8 +322,13 @@ def adjacency_matrix():
     return parse(AdjacencyHandler).matrix
 
 
+# don't use fs_cache - pandas can't handle so big files
 def read_adjacency_matrix(fname):
     # type: (str) -> pd.DataFrame
+    if not os.path.isfile(fname):
+        df = adjacency_matrix()
+        df.to_csv(fname, float_format="%.2g")
+        return df
     reader = csv.reader(open(fname))
     names = reader.next()[1:]
     # somehow float assignment + int conversion is faster
@@ -327,3 +338,10 @@ def read_adjacency_matrix(fname):
         tag = row[0]
         df.loc[tag] = np.array(row[1:], dtype=np.float32)
     return df.astype(np.int32)
+
+
+@so_cache
+def correlation(tag):
+    stat = read_adjacency_matrix(
+        os.path.join(d.DATASET_PATH, 'so.cache', 'adjacency.csv'))[tag]
+    return stat / stat[tag]

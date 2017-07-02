@@ -6,7 +6,7 @@ import logging
 import argparse
 import csv
 
-import settings
+from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from scraper import utils
@@ -30,7 +30,9 @@ class MyExecutor(object):
 
 
 class Command(BaseCommand):
-    help = "Monthly StackOverflow question stats by tags"
+    help = "Download and store commit and issues data for specified GitHub " \
+           "repositories. Repositories are accepted as CSV records in the " \
+           "format produced by ./manage.py pypi_packages_info"
 
     def add_arguments(self, parser):
         parser.add_argument('-i', '--input', default="-",

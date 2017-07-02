@@ -12,6 +12,10 @@ from xml.etree import ElementTree
 import re
 import shutil
 
+from common import decorators as d
+
+# TODO: bugtrack_url support
+
 # TODO: .whl support
 # - this is a zip format
 # - does not require sandbox
@@ -25,32 +29,23 @@ if PY3:
 else:
     from urllib import urlretrieve  # Python2
 
-SAVE_PATH = None
-try:
-    import settings
-    if hasattr(settings, 'DATASET_PATH'):
-        SAVE_PATH = os.path.join(settings.DATASET_PATH, 'pypi')
-except ImportError:
-    pass
-
+SAVE_PATH = os.path.join(d.DATASET_PATH, 'pypi')
 PYPI_URL = "https://pypi.python.org"
 _PATH = os.path.dirname(__file__) or '.'
+
+"""
+Notes:
+1. There is no reliable source for supported Python version.
+    requires-dist format is described here: 
+        https://www.python.org/dev/peps/pep-0345/#version-specifiers
+    Unfortunately, it is not informative at all:
+        - vast majority (99%) of packages doesn't use it
+        - many of those who use do not conform to the standard
+"""
 
 
 class PackageDoesNotExist(ValueError):
     pass
-
-
-def cache(key):
-    def decorator(func):
-        def wrapper(self, *args, **kwargs):
-            value = getattr(self, key, None)
-            if value is None:
-                value = func(self, *args, **kwargs)
-                setattr(self, key, value)
-            return value
-        return wrapper
-    return decorator
 
 
 def _shell(cmd, *args, **kwargs):
@@ -154,7 +149,7 @@ class Package(object):
         # TODO: add capability to remove backports
         return releases
 
-    @property
+    @d.cached_property
     def tempdir(self):
         """Lazy tempdir init"""
         if not self._tempdir:
@@ -179,7 +174,7 @@ class Package(object):
                 return None
         return filename
 
-    @cache('_pkgdir')
+    @d.cached_method
     def extract(self):
         fname = self.download()
         if fname is None:
@@ -220,24 +215,24 @@ class Package(object):
             return None
         return output.strip() or None  # output could be empty
 
-    @property
-    @cache('_github_url')
+    @d.cached_property
     def github_url(self):
+        # check home page first
         m = re.search("github\.com/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+",
-                      self.info.get('home_page', ''))
+                      self.info.get('info', {}).get('home_page', ''))
+        # TODO: check project-URL
+        #   https://www.python.org/dev/peps/pep-0345/#project-url-multiple-use
         if m:
             url = m.group(0)
         else:
             url = self._search("github\.com/[a-zA-Z0-9_-]+/" + self.name)
         return url and url[11:] or ''
 
-    @property
-    @cache('_google_group')
+    @d.cached_property
     def google_group(self):
         return self._search("groups\.google\.com/forum/#!forum/[a-zA-Z0-9_-]*")
 
-    @property
-    @cache('_dependencies')
+    @d.cached_property
     def dependencies(self):
         """Extract dependencies from setup.py"""
         dirname = self.extract()
@@ -245,8 +240,7 @@ class Package(object):
             return []
         return dependencies(dirname)
 
-    @property
-    @cache('_LOC')
+    @d.cached_property
     def size(self):
         """get size in LOC"""
         dirname = self.extract()
