@@ -45,7 +45,7 @@ class API(object):
         """ Generic, API version agnostic request method """
         while True:
             for token, (remaining, reset_time) in self.tokens.items():
-                if remaining == 0 and reset_time < time.time():
+                if remaining == 0 and reset_time > time.time():
                     continue  # try another token
                 # Exact API version can be specified by Accept header:
                 # "Accept": "application/vnd.github.v3+json"}
@@ -71,7 +71,8 @@ class API(object):
                 r.raise_for_status()
                 return r.json()
 
-            next_res = min(reset_time for _, reset_time in self.tokens.values())
+            next_res = min(reset_time for _, reset_time in self.tokens.values()
+                           if reset_time is not None)
             sleep = int(next_res - time.time()) + 1
             if sleep > 0:
                 time.sleep(sleep)
