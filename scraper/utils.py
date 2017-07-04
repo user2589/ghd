@@ -18,7 +18,7 @@ def commits(repo_name):
     return pd.DataFrame(
         github_api.repo_commits(repo_name),
         columns=['sha', 'author', 'author_name', 'author_email', 'authored_date',
-                 'committed_date', 'parents', 'message', 'verified'])
+                 'committed_date', 'parents'])  # , 'message', 'verified'])
 
 
 @scraper_cache('aggregate')
@@ -27,10 +27,11 @@ def commit_stats(repo_name):
     """Commits aggregated by month"""
     column = 'authored_date'
     df = commits(repo_name)[[column]]
-    df = df.groupby(df[column].str[:7]).count().rename(
-        columns={column: 'commits'}).astype(np.int)
     # filter out first commits without date (1970-01-01)
-    return df.loc[df.index > '2005']
+    # Git was created in 2005 but we need some slack because of imported repos
+    df = df.loc[df[column] > '1998']
+    return df.groupby(df[column].str[:7]).count().rename(
+        columns={column: 'commits'}).astype(np.int)
 
 
 @scraper_cache('raw')

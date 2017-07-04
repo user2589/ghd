@@ -4,14 +4,12 @@ from __future__ import print_function
 import os
 import re
 import csv  # pd.read_csv() doesn't work for large files, like adjacency matrix
-import datetime
 import requests
 import urllib
 import xml.sax
 import logging
 import subprocess
 import gzip  # workaround for libarchive
-import time
 import datetime
 
 import pandas as pd
@@ -100,7 +98,7 @@ def get_path(dataset_part, update=True):
         url = "https://archive.org/download/stackexchange/" \
               "stackoverflow.com-%s.7z" % dataset_part
         logger.info('downloading %s -> %s...', url, fname)
-        print(url, filename7z)
+        # TODO: check if url does not return 404 - happens at dataset updates
         urllib.urlretrieve(url, filename7z)
 
         # Workaround for a libarchive bug - convert to .gz

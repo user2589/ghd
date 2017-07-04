@@ -1,7 +1,9 @@
 
 import requests
 import time
+from datetime import datetime
 import json
+import logging
 from typing import Iterable
 
 try:
@@ -10,6 +12,8 @@ except ImportError:
     settings = object()
 
 _tokens = getattr(settings, "SCRAPER_GITHUB_API_TOKENS", [])
+
+logger = logging.getLogger('ghd.scraper')
 
 
 class RepoDoesNotExist(requests.HTTPError):
@@ -43,6 +47,7 @@ class API(object):
     def _request(self, url, method='get', data=None, **params):
         # type: (str, str, str) -> dict
         """ Generic, API version agnostic request method """
+        # TODO: use coroutines, perhaps Tornado (as PY2/3 compatible)
         while True:
             for token, (remaining, reset_time) in self.tokens.items():
                 if remaining == 0 and reset_time > time.time():
@@ -75,7 +80,10 @@ class API(object):
                            if reset_time is not None)
             sleep = int(next_res - time.time()) + 1
             if sleep > 0:
+                logger.info("%s: out of keys, resuming in %d minutes, %d seconds",
+                            datetime.now().strftime("%H:%M"), *divmod(sleep, 60))
                 time.sleep(sleep)
+                logger.info(".. resumed")
 
     def v3(self, url, method='get', data=None, **params):
         # type: (str, str, str) -> Iterable[dict]
@@ -177,13 +185,15 @@ class API(object):
                 break
 
             for commit in data:
-                author = commit['commit'].get('author') or {}
+                # might be None for commits authored outside of github
+                github_author = commit['author'] or {}
+                commit_author = commit['commit'].get('author') or {}
                 yield {
                     'sha': commit['sha'],
-                    'author': author.get('login'),
-                    'author_name': author.get('name'),
-                    'author_email': author.get('email'),
-                    'authored_date': author.get('date'),
+                    'author': github_author.get('login'),
+                    'author_name': commit_author.get('name'),
+                    'author_email': commit_author.get('email'),
+                    'authored_date': commit_author.get('date'),
                     'message': commit['commit']['message'],
                     'committed_date': commit['commit']['committer']['date'],
                     'parents': "\n".join(p['sha'] for p in commit['parents']),

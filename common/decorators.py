@@ -39,7 +39,9 @@ def fs_cache(app_name, cache_type='', expires=DEFAULT_EXPIRY):
             cache_fpath = os.path.join(cache_path, cache_filename)
             if os.path.isfile(cache_fpath):
                 if time.time() - os.path.getmtime(cache_fpath) < expires:
-                    return pd.read_csv(cache_fpath, index_col=0)
+                    # TODO: change back to engine=c after recollecting the data
+                    return pd.read_csv(cache_fpath, index_col=0,
+                                       encoding="utf8")  # , engine="python")
             df = func(*args)
             df.to_csv(cache_fpath)
             return df
