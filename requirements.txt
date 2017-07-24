@@ -8,6 +8,8 @@ psycopg2
 matplotlib
 pandas
 numpy
+scikit-learn
+seaborn
 
 # ===========================
 # STACKOVERFLOW
@@ -25,3 +27,8 @@ libarchive
 # PYPI
 # ===========================
 # requires docker: sudo apt-get install docker-compose
+
+# ===========================
+# NPM
+# ===========================
+ijson
