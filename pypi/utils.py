@@ -190,6 +190,8 @@ class Package(object):
 
         basename = os.path.basename(fname[:-len(extension)])
         pkgdir = os.path.join(self.tempdir, basename)
+        # TODO: move to exernal shell script which will also fix permissions
+        # and output top extracted directory(ies)
         cmd = self.formats[extension] % {
             'fname': fname, 'bname': basename, 'dir': self.tempdir}
         if not os.path.isdir(pkgdir):
@@ -257,3 +259,23 @@ class Package(object):
 def list_packages():
     tree = ElementTree.fromstring(Package._request("simple/").text)
     return [a.text for a in tree.iter('a')]
+
+
+def packages_info(google_group=False, dependencies=False, size=False):
+    for pkgname in list_packages():
+        try:
+            p = Package(pkgname)
+        except PackageDoesNotExist:
+            # some deleted packages aren't removed from the list
+            continue
+
+        pkg = {'name': pkgname, 'github_url': p.github_url}
+        if google_group:
+            pkg['google_group'] = p.google_group
+        if dependencies:
+            pkg['dependencies'] = ",".join(p.dependencies)
+        if size:
+            pkg['size'] = p.size  # takes a lot of time to process
+        yield pkg
+
+
