@@ -334,8 +334,9 @@ def read_adjacency_matrix(fname):
     df = pd.DataFrame(0, dtype=np.float32, columns=names, index=names)
     for row in reader:
         tag = row[0]
+        # float16 is not big enough to hold some counts
         df.loc[tag] = np.array(row[1:], dtype=np.float32)
-    return df.astype(np.int32)
+    return df.astype(np.uint32)
 
 
 @so_cache
@@ -343,3 +344,23 @@ def correlation(tag):
     stat = read_adjacency_matrix(
         os.path.join(d.DATASET_PATH, 'so.cache', 'adjacency.csv'))[tag]
     return stat / stat[tag]
+
+
+def tags_hierarchy(adjacency_df):
+    # takes almost 64GB of RAM to process
+    s = pd.DataFrame(index=adjacency_df.index)
+    s['count'] = np.diag(adjacency_df)
+
+    adjacency_df = adjacency_df.div(s['count'], axis=1).astype(np.float16)
+    adjacency_df -= np.eye(len(s), dtype=np.float16)
+
+    s['parent'] = adjacency_df.idxmax(axis=0)
+    s['corr'] = adjacency_df.max(axis=0)
+
+    s = s.merge(s[['count']], left_on='parent', right_index=True,
+                suffixes=("", "_parent"))
+    s['true_parent'] = s['parent']
+
+    s.loc[s['count'] >= s['count_parent'], 'true_parent'] = 'root'
+
+    return s
