@@ -49,6 +49,7 @@ class API(object):
         """ Generic, API version agnostic request method """
         # TODO: use coroutines, perhaps Tornado (as PY2/3 compatible)
         while True:
+            # TODO: sort keys to use next to expire first
             for token, (remaining, reset_time) in self.tokens.items():
                 if remaining == 0 and reset_time > time.time():
                     continue  # try another token
@@ -171,6 +172,8 @@ class API(object):
 
     def repo_commits(self, repo_name, page=1):
         # type: (str, int) -> Iterable[dict]
+        # check repo_name follows pattern %owner/%repo
+        _, _ = repo_name.split("/")
         url = "repos/%s/commits" % repo_name
         while True:
             try:
