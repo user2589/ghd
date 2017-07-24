@@ -25,9 +25,20 @@ DATASET_PATH = getattr(settings, 'DATASET_PATH', None) or \
 mkdir(DATASET_PATH)
 
 
-def fs_cache(app_name, cache_type='', expires=DEFAULT_EXPIRY):
-    # type: (str, int) -> callable
-    cache_path = mkdir(DATASET_PATH, app_name + ".cache", cache_type)
+def get_cache_path(app_name, cache_type="", ds_path=DATASET_PATH):
+    if not app_name:
+        return ds_path
+    return mkdir(ds_path, app_name + ".cache", cache_type)
+
+
+def expired(cache_fpath, expires):
+    return not os.path.isfile(cache_fpath) \
+           or time.time() - os.path.getmtime(cache_fpath) > expires
+
+
+def fs_cache(app_name, idx=1, cache_type='', expires=DEFAULT_EXPIRY):
+    # type: (str, int, str, int) -> callable
+    cache_path = get_cache_path(app_name, cache_type)
 
     def decorator(func):
         @wraps(func)
@@ -37,13 +48,11 @@ def fs_cache(app_name, cache_type='', expires=DEFAULT_EXPIRY):
                 "_".join([str(arg).replace("/", ".") for arg in args]),
                 "csv"])
             cache_fpath = os.path.join(cache_path, cache_filename)
-            if os.path.isfile(cache_fpath):
-                if time.time() - os.path.getmtime(cache_fpath) < expires:
-                    # TODO: change back to engine=c after recollecting the data
-                    return pd.read_csv(cache_fpath, index_col=0,
-                                       encoding="utf8")  # , engine="python")
+            if not expired(cache_fpath, expires):
+                return pd.read_csv(cache_fpath, index_col=range(idx),
+                                   encoding="utf8")
             df = func(*args)
-            df.to_csv(cache_fpath)
+            df.to_csv(cache_fpath, float_format="%.2g", encoding="utf-8")
             return df
 
         return wrapper
@@ -52,8 +61,8 @@ def fs_cache(app_name, cache_type='', expires=DEFAULT_EXPIRY):
 
 def typed_fs_cache(app_name, expires=DEFAULT_EXPIRY):
     # type: (str, int) -> callable
-    def _cache(cache_type):
-        return fs_cache(app_name, cache_type, expires)
+    def _cache(cache_type, idx=1):
+        return fs_cache(app_name, idx, cache_type=cache_type, expires=expires)
 
     return _cache
 

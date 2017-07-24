@@ -1,28 +1,103 @@
 
+import logging
+import importlib
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.cluster import KMeans
 
 from common import decorators as d
 from scraper import utils as scraper_utils
 from so import utils as so_utils
 
 SO_STATS = so_utils.question_stats()
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("ghd.common")
+
+
+@d.fs_cache('')
+def package_urls(ecosystem):
+    # type: (str, str, str) -> (str, str)
+    """Get list of packages and their respective GitHub repositories"""
+    assert ecosystem in ('pypi', 'npm'), "Ecosystem is not suppoerted"
+    pkg = importlib.import_module(ecosystem + '.utils')
+    return pd.DataFrame(pkg.packages_info(), columns=['name', 'github_url']
+                        ).set_index('name').dropna()
+
+
+@d.fs_cache('common')
+def clustering_data(ecosystem, metric):
+    providers = {
+        'commits': scraper_utils.commit_stats,
+        'contributors': scraper_utils.commit_users,
+        'issues': scraper_utils.new_issues,
+        'gini': scraper_utils.commit_gini,
+        'q50': lambda repo: scraper_utils.contributions_quantile(repo, 0.5),
+        'q70': lambda repo: scraper_utils.contributions_quantile(repo, 0.7),
+        'non-overlap': scraper_utils.non_overlap,
+    }
+    assert metric in providers, "Metric is not supported"
+    metric_provider = providers[metric]
+    packages = package_urls(ecosystem)
+    dates = pd.date_range(scraper_utils.MIN_DATE, 'now', freq='M')
+    cdf = pd.DataFrame(index=packages.index,
+                       columns=np.arange(len(dates)))
+    for package, row in packages.iterrows():
+        logger.info("Processing %s (%s)", package, row['github_url'])
+        monthly_stats = metric_provider(row['github_url'])
+        cdf.loc[row.name, :len(monthly_stats)-1] = monthly_stats.values.ravel()
+    return cdf.dropna(how='all', axis=1)
+
+
+def cluster(cdf, years, n_clusters):
+    c = KMeans(n_clusters=n_clusters)
+    cdf.columns = [int(column) for column in cdf.columns]
+    cdf = cdf.iloc[:, :years * 12 - 1]
+    cdf = cdf.loc[pd.notnull(cdf.iloc[:, -1])]
+    classes = c.fit_predict(cdf.values)
+    predictions = pd.DataFrame(classes, index=cdf.index, columns=['class'])
+    return predictions
+
+
+def tsplot(cdf, classes=None, title="", fname=None):
+    classes = classes or np.zeros(len(cdf))
+    blank = pd.DataFrame(np.array([
+        cdf.values.ravel(),  # values
+        np.tile(np.arange(len(cdf.columns)), len(cdf)),  # time
+        np.repeat(np.arange(len(cdf)), len(cdf.columns)),  # unit
+        np.repeat(classes, len(cdf.columns))  # condition
+    ]).T, columns=['value', 'time', 'unit', 'condition'])
+    sns.tsplot(blank,
+               value='value', time='time', unit='unit', condition='condition')
+    if title:
+        plt.title(title)
+    plt.show()
+    if fname:
+        plt.savefig(fname, bbox_inches='tight')
 
 
 @d.fs_cache('trajectories')
 def get_data(package_name, repo_name, language=""):
     # type: (str, str, str) -> pd.DataFrame
+    """Deprecated function that was used for visualization of trajectories
+    Now it is replaced by seabobrn tsplot capabilities and clusters"""
     commits = scraper_utils.commit_stats(repo_name)
     new_issues = scraper_utils.new_issues(repo_name)
     open_issues = scraper_utils.open_issues(repo_name)
+    df = pd.concat([commits, new_issues, open_issues], axis=1)
+
+    if len(commits) == 0:
+        # it is possible that repo has only invalid commits (e.g. invalid date)
+        # but has valid issues. In this case we need to truncate issues data
+        return df.iloc[:0]
+
     last_deployment = max(commits.index)
     if not new_issues.empty:
         last_deployment = min(last_deployment, max(new_issues.index))
 
-    df = pd.concat([commits, new_issues, open_issues], axis=1)
-
-    lname = language and language + "-" + package_name
+    lname = language and (language + "-" + package_name)
     so_name = lname if lname and lname in SO_STATS.index else package_name
 
     if so_name in SO_STATS.index:
@@ -37,8 +112,6 @@ def get_data(package_name, repo_name, language=""):
             last_deployment = min(last_deployment, max(questions.index))
     if 'so' not in df:
         df['so'] = 0
-    if df.empty:
-        return df
 
     idx = [d.strftime("%Y-%m") for d in pd.date_range(
         period='M', start=min(df.index), end=min(max(df.index), last_deployment))]
@@ -49,6 +122,7 @@ def get_data(package_name, repo_name, language=""):
 
 
 class Plot(object):
+    """Helper object to visualize a trajectory. Deprecated in favor of tsplot"""
     def __init__(self, title, x, y, z=None,
                  figure_params=None, plot_defaults=None, log=''):
         # type: (str, str, str, str, dict, dict, str) -> None
