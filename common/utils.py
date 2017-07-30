@@ -13,7 +13,6 @@ from scraper import utils as scraper_utils
 
 # from so import utils as so_utils
 # SO_STATS = so_utils.question_stats()
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ghd.common")
 
 
@@ -42,13 +41,20 @@ def clustering_data(ecosystem, metric):
     metric_provider = providers[metric]
     packages = package_urls(ecosystem)
     dates = pd.date_range(scraper_utils.MIN_DATE, 'now', freq='M')
-    cdf = pd.DataFrame(index=packages.index,
-                       columns=np.arange(len(dates)))
-    for package, row in packages.iterrows():
+
+    def process(package, row):
         logger.info("Processing %s (%s)", package, row['github_url'])
-        monthly_stats = metric_provider(row['github_url'])
-        cdf.loc[row.name, :len(monthly_stats)-1] = monthly_stats.values.ravel()
-    return cdf.dropna(how='all', axis=1)
+        return metric_provider(row['github_url'])[metric].reset_index(
+            drop=True).rename(package)
+
+    def gen():
+        for package, row in packages.iterrows():
+            s = process(package, row)
+            if not s.empty:
+                yield s
+
+    cdf = pd.concat(gen(), axis=1)
+    return cdf.T.dropna(how='all', axis=1)
 
 
 def head(cdf, years):
