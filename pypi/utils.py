@@ -140,9 +140,11 @@ def _get_builtins(python_version):
 
 
 def loc_size(package_dir):
-    _, pylint_out = _shell("pylint", "--py3k", package_dir,
-                           local=False, raise_on_status=False,
-                           stderr=open(os.devnull, 'w'))
+    status, pylint_out = _shell("pylint", "--py3k", package_dir,
+                                local=False, raise_on_status=False,
+                                stderr=open(os.devnull, 'w'))
+    if status == 2:
+        raise EnvironmentError("pylint is not installed")
     m = re.search("\|code\s*\|([\\s\\d]+?)\|", pylint_out)
     match = m and m.group(1).strip()
     if not match:
@@ -309,9 +311,9 @@ class Package(object):
             return None
 
         info_path = self._info_path(ver)
-        if info_path:
-            fh = open(os.path.join(info_path, 'top_level.txt'), 'r')
-            dirname = os.path.basename(fh.read(80).strip())
+        tl_fname = info_path and os.path.join(info_path, 'top_level.txt')
+        if tl_fname and os.path.isfile(tl_fname):
+            dirname = os.path.basename(open(tl_fname, 'r').read(80).strip())
             logger.debug("    .. assumed from top_level.txt")
         elif os.path.isdir(os.path.join(extract_dir, self.name)):
             # welcome to the darkest year of our adventures, Morti

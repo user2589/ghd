@@ -1,6 +1,7 @@
 
+import os
+import sys
 import csv
-import argparse
 import logging
 import multiprocessing
 
@@ -21,8 +22,7 @@ class Command(BaseCommand):
     help = 'TBD'
 
     def add_arguments(self, parser):
-        parser.add_argument('-o', '--output', default="-",
-                            type=argparse.FileType('w'),
+        parser.add_argument('-o', '--output', default="-", type=str,
                             help='Output filename, "-" or skip for stdout')
         parser.add_argument('-w', '--workers', default=1, type=int,
                             help='Number of workers to use (1 by default)')
@@ -31,9 +31,24 @@ class Command(BaseCommand):
         loglevel = 40 - 10*options['verbosity']
         logger.setLevel(loglevel)
 
-        writer = csv.DictWriter(
-            options['output'],
-            fieldnames=['name', 'version', 'date', 'dependencies', 'size'])
+        columns = ['name', 'version', 'date', 'dependencies', 'size']
+        existing = set()
+
+        if options["output"] == "-":
+            output = sys.stdout
+        else:
+            if os.path.isfile(options["output"]):
+                logger.warning("Output file already exists. Existing records "
+                               "will be reused")
+                reader = csv.DictReader(open(options["output"]))
+                assert reader.fieldnames == columns, \
+                    "Field names in the provided file do not match output"
+                for row in reader:
+                    existing.add((row["name"], row["version"]))
+            mode = "a" if existing else "w"
+            output = open(options["output"], mode)
+
+        writer = csv.DictWriter(output, fieldnames=columns)
         save_path = decorators.mkdir(settings.DATASET_PATH, 'pypi')
 
         def target(p):
@@ -42,12 +57,13 @@ class Command(BaseCommand):
                 'version': label,
                 'date': date,
                 'dependencies': ",".join(p.dependencies(label)),
-                'size': p.size(label)
-            } for label, date in p.releases()]
+                'size': p.size(label)}
+                for label, date in p.releases()
+                if (p.name, label) not in existing]
 
         def callback(rows):
             writer.writerows(rows)
-            options['output'].flush()
+            output.flush()
 
         workers = min(max(options['workers'], 1), CPU_COUNT)
         tp = threadpool.ThreadPool(workers)
