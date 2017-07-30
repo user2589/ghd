@@ -30,6 +30,7 @@ class MyExecutor(object):
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = "Download and store commit and issues data for specified GitHub " \
            "repositories. Repositories are accepted as CSV records in the " \
            "format produced by ./manage.py pypi_packages_info"

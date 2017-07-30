@@ -17,6 +17,7 @@ CPU_COUNT = multiprocessing.cpu_count()
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = 'TBD'
 
     def add_arguments(self, parser):
@@ -58,5 +59,7 @@ class Command(BaseCommand):
                 # some deleted packages aren't removed from the list
                 continue
 
-            logger.debug("Processing %s", package_name)
+            logger.info("Processing %s", package_name)
             tp.submit(target, p, callback=callback)
+
+        tp.shutdown()

@@ -9,6 +9,7 @@ from pypi import utils
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = "Download a list of PyPi packages and their properties in CSV format"
 
     def add_arguments(self, parser):

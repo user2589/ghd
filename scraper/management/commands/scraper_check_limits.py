@@ -9,6 +9,7 @@ from scraper import github
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = "Check limits on registered GitHub API keys"
 
     def handle(self, *args, **options):

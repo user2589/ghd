@@ -8,6 +8,7 @@ from so import utils
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = "Monthly StackOverflow question stats by tags"
 
     def add_arguments(self, parser):

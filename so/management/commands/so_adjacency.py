@@ -7,6 +7,7 @@ from so import utils
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = 'Produce adjacency matrix of StackOverflow tags'
 
     def add_arguments(self, parser):

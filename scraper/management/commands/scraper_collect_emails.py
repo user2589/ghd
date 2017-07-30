@@ -18,6 +18,7 @@ logger = logging.getLogger('ghd.scraper')
 
 
 class Command(BaseCommand):
+    requires_system_checks = False
     help = "Create mapping of GitHub users to their emails for mathching " \
            "StackOverflow records. The result is store in cache folder.\n\n" \
            "This data is generated from commits records, so it is recommnded " \
