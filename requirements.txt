@@ -31,4 +31,5 @@ libarchive
 # ===========================
 # NPM
 # ===========================
+# requires yajl: sudo apt-get install yajl-tools
 ijson

@@ -18,8 +18,6 @@ from so import utils as so_utils
 #     same + 2 classes of developers
 # TODO: developers / window - try for several repositories?
 
-from statsmodels import api
-
 # constants
 SO_STATS = so_utils.question_stats()
 COLUMNS = {'commits', 'new_issues', 'open_issues', 'so', 'time'}

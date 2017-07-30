@@ -31,7 +31,9 @@ def user_stats(stats, date_field, aggregated_field):
     # type: (pd.DataFrame, str, str) -> pd.DataFrame
     """Helper function for internal use only
     Aggregates specified stats dataframe by month/users"""
-    padding = pd.DataFrame()
+    if stats.empty:
+        # a dirty hack to allow further aggregation
+        return pd.DataFrame(columns=[date_field, 'author', aggregated_field])
     return stats[['author']].groupby(
         [stats[date_field].str[:7], stats['author']]).count().rename(
         columns={'author': aggregated_field}
