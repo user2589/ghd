@@ -68,13 +68,14 @@ def typed_fs_cache(app_name, expires=DEFAULT_EXPIRY):
 
 
 def cached_method(func):
-    key = "_" + func.__name__
-
     @wraps(func)
-    def wrapper(self):
-        if not hasattr(self, key):
-            setattr(self, key, func(self))
-        return getattr(self, key)
+    def wrapper(self, *args):
+        if not hasattr(self, "_cache"):
+            self._cache = {}
+        key = "__".join((func.__name__,) + args)
+        if key not in self._cache:
+            self._cache[key] = func(self, *args)
+        return self._cache[key]
     return wrapper
 
 
