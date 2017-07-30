@@ -42,16 +42,13 @@ def clustering_data(ecosystem, metric):
     packages = package_urls(ecosystem)
     dates = pd.date_range(scraper_utils.MIN_DATE, 'now', freq='M')
 
-    def process(package, row):
-        logger.info("Processing %s (%s)", package, row['github_url'])
-        return metric_provider(row['github_url'])[metric].reset_index(
-            drop=True).rename(package)
-
     def gen():
         for package, row in packages.iterrows():
-            s = process(package, row)
-            if not s.empty:
-                yield s
+            logger.info("Processing %s (%s)", package, row['github_url'])
+            df = metric_provider(row['github_url'])
+            if df.empty:
+                continue
+            yield df[df.columns[0]].reset_index(drop=True).rename(package)
 
     cdf = pd.concat(gen(), axis=1)
     return cdf.T.dropna(how='all', axis=1)

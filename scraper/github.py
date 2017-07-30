@@ -69,7 +69,7 @@ class API(object):
                     if r.status_code == 403 and remaining == 0:
                         continue  # retry with another token
 
-                if r.status_code == 404:  # API v3 only
+                if r.status_code in (404, 451):  # API v3 only
                     raise RepoDoesNotExist
                 elif r.status_code == 409:
                     # repository is empty https://developer.github.com/v3/git/

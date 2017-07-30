@@ -90,7 +90,9 @@ def commit_user_stats(repo_name):
     df = user_stats(stats, "authored_date", "commits")
     # filter out first commits without date (1970-01-01)
     # Git was created in 2005 but we need some slack because of imported repos
-    return df.loc[df.index.get_level_values("authored_date") > MIN_DATE]
+    if not df.empty:
+        df = df.loc[df.index.get_level_values("authored_date") > MIN_DATE]
+    return df
 
 
 @scraper_cache('aggregate')
