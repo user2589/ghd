@@ -10,9 +10,9 @@ from sklearn.cluster import KMeans
 
 from common import decorators as d
 from scraper import utils as scraper_utils
-from so import utils as so_utils
 
-SO_STATS = so_utils.question_stats()
+# from so import utils as so_utils
+# SO_STATS = so_utils.question_stats()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ghd.common")
 
@@ -51,26 +51,34 @@ def clustering_data(ecosystem, metric):
     return cdf.dropna(how='all', axis=1)
 
 
-def cluster(cdf, years, n_clusters):
-    c = KMeans(n_clusters=n_clusters)
+def head(cdf, years):
     cdf.columns = [int(column) for column in cdf.columns]
     cdf = cdf.iloc[:, :years * 12 - 1]
-    cdf = cdf.loc[pd.notnull(cdf.iloc[:, -1])]
+    return cdf.loc[pd.notnull(cdf.iloc[:, -1])]
+
+
+def cluster(cdf, n_clusters, years):
+    c = KMeans(n_clusters=n_clusters)
+    cdf = head(cdf, years)
     classes = c.fit_predict(cdf.values)
     predictions = pd.DataFrame(classes, index=cdf.index, columns=['class'])
     return predictions
 
 
-def tsplot(cdf, classes=None, title="", fname=None):
-    classes = classes or np.zeros(len(cdf))
+def tsplot(cdf, classes=None, title="", fname=None, figsize=None, **kwargs):
+    # type: (pd.DataFrame, pd.DataFrame, str, str) -> None
+    if classes is None:
+        classes = pd.DataFrame(0, index=cdf.index, columns=['class'])
+    cdf = cdf.loc[classes.index]
     blank = pd.DataFrame(np.array([
         cdf.values.ravel(),  # values
         np.tile(np.arange(len(cdf.columns)), len(cdf)),  # time
         np.repeat(np.arange(len(cdf)), len(cdf.columns)),  # unit
-        np.repeat(classes, len(cdf.columns))  # condition
+        np.repeat(classes.values, len(cdf.columns))  # condition
     ]).T, columns=['value', 'time', 'unit', 'condition'])
-    sns.tsplot(blank,
-               value='value', time='time', unit='unit', condition='condition')
+    fig = plt.figure(figsize=figsize)
+    sns.tsplot(blank, value='value', time='time', unit='unit',
+               condition='condition', **kwargs)
     if title:
         plt.title(title)
     plt.show()
