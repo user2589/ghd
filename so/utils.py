@@ -328,6 +328,7 @@ def read_adjacency_matrix(fname):
         df.to_csv(fname, float_format="%.2g")
         return df
     reader = csv.reader(open(fname))
+    # TODO: speedup using common.clustering_data example
     names = reader.next()[1:]
     # somehow float assignment + int conversion is faster
     # https://stackoverflow.com/questions/41644059/
@@ -352,7 +353,7 @@ def tags_hierarchy(adjacency_df):
     s['count'] = np.diag(adjacency_df)
 
     adjacency_df = adjacency_df.div(s['count'], axis=1).astype(np.float16)
-    adjacency_df -= np.eye(len(s), dtype=np.float16)
+    np.fill_diagonal(adjacency_df.values, 0)
 
     s['parent'] = adjacency_df.idxmax(axis=0)
     s['corr'] = adjacency_df.max(axis=0)

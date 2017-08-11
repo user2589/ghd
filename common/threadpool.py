@@ -26,6 +26,8 @@ class ThreadPool(object):
                     self.callback_semaphore.acquire()
                     try:
                         callback(result)
+                    except Exception as e:
+                        logging.exception(e)
                     finally:
                         self.callback_semaphore.release()
             finally:
