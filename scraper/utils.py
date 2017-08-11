@@ -1,6 +1,7 @@
 
 import logging
 from functools import wraps
+from collections import defaultdict
 
 import pandas as pd
 import numpy as np
@@ -8,8 +9,30 @@ import numpy as np
 from scraper import github
 from common import decorators
 
+""" First contrib date without MIN_DATE restriction:
+> fcd = utils.first_contrib_dates("pypi").dropna()
+> df = pd.DataFrame(fcd.rename("fcd"))
+> df["url"] = utils.package_urls("pypi")
+> df = df.dropna(axis=1).sort_values("fcd")
+> df.groupby(df["fcd"].str[:4]).count()
 
-MIN_DATE = "1998"
+> data = df.iloc[:400]
+> def second_month(row):
+>     cs = scraper_utils.commit_stats(row["url"])
+>     return cs[cs>0].index[1]
+> data["second_month"] = data.apply(second_month, axis=1)
+> data.groupby(data["second_month"].str[:4]).count()
+
+1970: 3, 1973: 1, 1974: 3, 1997+: 2, 2, 2, 9, 14, 29, 50, 45, 99, 118, ...
+looking at their second month of contributions, it is:
+nothing before 1997,       1997+: 2, 0, 1, 9, 12, 18, 50, 47, 77, 113,  
+
+
+So, 1997 looks like a reasonable lower bound.
+Only 7 projects (1 commit each) have such commits, so they are safe to ignore
+"""
+
+MIN_DATE = "1997"
 DEFAULT_USERNAME = "-"
 github_api = github.API()
 scraper_cache = decorators.typed_fs_cache('scraper')
@@ -79,12 +102,61 @@ def clean_email(raw_email):
 
 
 @scraper_cache('raw')
-def commits(repo_name):
+def _commits(repo_name):
     # type: (str) -> pd.DataFrame
+    """
+    convert old cache files:
+    find -type f -name '*.csv' -exec rename 's/(?<=\/)commits\./_commits./' {} +
+    """
     return pd.DataFrame(
         github_api.repo_commits(repo_name),
         columns=['sha', 'author', 'author_name', 'author_email', 'authored_date',
-                 'committed_date', 'parents']).set_index('sha')
+                 'committed_date', 'parents']).set_index('sha', drop=True)
+
+
+# it is only few miliseconds so file caching doesn't make it faster
+def commits(repo_name):
+    # type: (str) -> pd.DataFrame
+    """ Fix dates in original commits
+    ~200ms overhead for 26k commits
+    :param repo_name: str, "<owner_login>/<login>"
+    :return: pd.DataFrame with commits
+    """
+    cs = _commits(repo_name)
+
+    dates = cs['authored_date'].to_dict()
+    parents = defaultdict(set)
+    children = defaultdict(set)
+
+    for child, ps in cs['parents'].iteritems():
+        if pd.notnull(ps):
+            parents[child] = set(ps.split("\n"))
+            for parent in parents[child]:
+                children[parent].add(child)
+
+    commits2update = {}
+    for sha, pts in parents.items():
+        # if p in dates is necessary to account for incomplete history
+        # usually it happens when a new commit is made during retrieval
+        maxdate = max(dates[p] for p in pts if p in dates)
+        if maxdate > dates[sha]:
+            commits2update[sha] = maxdate
+
+    while len(commits2update) > 0:
+        new_commits2update = {}
+        for sha, date in commits2update.items():
+            for child in children[sha]:
+                if dates[child] < date:
+                    if child in new_commits2update:
+                        new_commits2update[child] = max(
+                            date, new_commits2update[child])
+                    else:
+                        new_commits2update[child] = date
+
+        dates.update(commits2update)
+        commits2update = new_commits2update
+    cs['authored_date'].update(pd.Series(dates))
+    return cs.loc[cs['authored_date'] > MIN_DATE]
 
 
 @scraper_cache('aggregate', 2)
@@ -139,30 +211,21 @@ def issues(repo_name):
 
 
 @scraper_cache('aggregate')
-@zeropad(0)
-def non_overlap(repo_name):
+def non_dev_issues(repo_name):
+    # type: (str) -> pd.DataFrame
     """Same as new_issues with subtracted issues authored by contributors"""
     cs = commits(repo_name)[['authored_date', 'author']]
-    cs = cs.loc[pd.notnull(cs['author'])].sort_values(by='authored_date').reset_index()
+    fc = cs.loc[pd.notnull(cs['author'])].groupby(
+        'author').min()['authored_date']
 
-    if cs.empty:
-        return new_issues(repo_name)
+    i = issues(repo_name)[['created_at', 'author']].sort_values('created_at')
+    i['fc'] = i['author'].map(fc)
+    return i.loc[~(i['fc'] < i['created_at']), ['author', 'created_at']]
 
-    iss = issues(repo_name).sort_values(by='created_at').reset_index()[['created_at', 'author']]
-    contributors = set()
-    i = 0
 
-    iss['contributor'] = False
-
-    for idx, row in iss.iterrows():
-        while i < len(cs) and cs.ix[i, 'authored_date'] < row['created_at']:
-            contributors.add(cs.ix[i, 'author'])
-            i += 1
-        if row['author'] in contributors:
-            iss.loc[idx, 'contributor'] = True
-
-    return iss[iss['contributor']].groupby(iss["created_at"].str[:7]).count(
-        )[['contributor']].rename(columns={'contributor': "non_overlap"})
+@scraper_cache('aggregate', 2)
+def issue_user_stats(repo_name):
+    return user_stats(issues(repo_name), "created_at", "new_issues")
 
 
 @scraper_cache('aggregate')
@@ -173,24 +236,40 @@ def new_issues(repo_name):
     return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
 
 
+@scraper_cache('aggregate')
+@zeropad(0)
+def submitters(repo_name):
+    # type: (str) -> pd.Series
+    """New issues aggregated by month"""
+    return issue_user_stats(repo_name).groupby(
+        'created_at').sum()["new_issues"].rename("submitters")
+
+
+@scraper_cache('aggregate')
+@zeropad(0)
+def non_dev_issue_stats(repo_name):
+    # type: (str) -> pd.Series
+    """New issues aggregated by month"""
+    i = non_dev_issues(repo_name)
+    return i.groupby(i['created_at'].str[:7]).count()['created_at'].rename(
+        "non_dev_issues")
+
+
+@scraper_cache('aggregate')
+def closed_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """New issues aggregated by month"""
-    return issue_user_stats(repo_name).groupby('created_at').sum()
+    df = issues(repo_name)
+    closed = df.loc[df['closed'], 'closed_at']
+    return _zeropad(closed.groupby(closed.str[:7]).count(),
+                    start=df['created_at'].min())
 
 
 @scraper_cache('aggregate')
 def open_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """Open issues aggregated by month"""
-    df = issues(repo_name)
-    column = 'closed_at'
-    closed_issues = df.loc[df['closed'], [column]].rename(
-        columns={column: 'closed_issues'})
-    if len(closed_issues) == 0:
-        return pd.DataFrame(columns=['open_issues'])
-    closed = _zeropad(
-        closed_issues.groupby(closed_issues['closed_issues'].str[:7]).count())
-    new = new_issues(repo_name)
-    df = pd.concat([closed, new], axis=1).fillna(0).cumsum()
-    df['open_issues'] = df['new_issues'] - df['closed_issues']
-    return df[['open_issues']].astype(np.int)
+    submitted = new_issues(repo_name).cumsum()
+    closed = closed_issues(repo_name).cumsum()
+    res = submitted - closed
+    return res.rename("open_issues")
