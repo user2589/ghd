@@ -43,9 +43,11 @@ _PATH = os.path.dirname(__file__) or '.'
 # supported formats and extraction commands
 unzip = 'unzip -qq -o "%(fname)s" -d "%(dir)s" 2>/dev/null'
 untgz = 'tar -C "%(dir)s" --strip-components 1 -zxf "%(fname)s" 2>/dev/null'
+# TODO: rpm support
 SUPPORTED_FORMATS = {
     '.zip': unzip,
     '.whl': unzip,
+    '.egg': unzip,
     '.tar.gz': untgz,
     '.tgz': untgz,
     '.tar.bz2': untgz,
@@ -144,7 +146,8 @@ def loc_size(package_dir):
                                 local=False, raise_on_status=False,
                                 stderr=open(os.devnull, 'w'))
     if status == 2:
-        raise EnvironmentError("pylint is not installed")
+        raise EnvironmentError("pylint is not installed (just in case, path is "
+                               "%s)" % package_dir)
     m = re.search("\|code\s*\|([\\s\\d]+?)\|", pylint_out)
     match = m and m.group(1).strip()
     if not match:
@@ -223,11 +226,13 @@ class Package(object):
         assert ver in self.info['releases']
         for pkgtype in ("bdist_wheel", "sdist"):
             for info in self.info['releases'][ver]:
-                if info['packagetype'] == pkgtype:
+                if info['packagetype'] == pkgtype and \
+                    any(info['url'].endswith(ext)
+                        for ext in SUPPORTED_FORMATS):
                     return info['url']
         # no downloadable files in supported format
-        logger.info("No downloadable files for package %s ver %s found",
-                    self.name, ver)
+        logger.info("No downloadable files in supported formats "
+                    "for package %s ver %s found", self.name, ver)
         return None
 
     @d.cached_method
@@ -290,7 +295,7 @@ class Package(object):
 
         dist_info_path = "%s-%s.dist-info" % (self.canonical_name, ver)
         egg_info_path = "%s.egg-info" % self.canonical_name
-        for info_path in (dist_info_path, egg_info_path):
+        for info_path in (dist_info_path, egg_info_path, "EGG-INFO"):
             path = os.path.join(extract_dir, info_path)
             if os.path.isdir(path):
                 logger.debug("Project has info folder: %s", path)
@@ -413,6 +418,7 @@ class Package(object):
     @d.cached_method
     def size(self, ver):
         """get size in LOC"""
+        # TODO: support for a single file
         path = self.top_level_dir(ver)
         if not path:
             return 0  # no downloadable sources == 0 LOC
