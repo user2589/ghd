@@ -1,7 +1,9 @@
 
+import logging
+from functools import wraps
+
 import pandas as pd
 import numpy as np
-from functools import wraps
 
 from scraper import github
 from common import decorators
@@ -11,6 +13,8 @@ MIN_DATE = "1998"
 DEFAULT_USERNAME = "-"
 github_api = github.API()
 scraper_cache = decorators.typed_fs_cache('scraper')
+
+logger = logging.getLogger("ghd.scraper")
 
 
 def gini(x):
@@ -40,16 +44,15 @@ def user_stats(stats, date_field, aggregated_field):
     ).astype(np.int)
 
 
-def _zeropad(df, fill_value=0, pad=3):
+def _zeropad(df, fill_value=0, start=None, pad=3):
     """Ensure monthly index on the passed df, fill in gaps with zeroes"""
-    if df.empty:
-        return df
-    idx = [d.strftime("%Y-%m")
-           for d in pd.date_range(min(df.index), 'now', freq="M")]
-    zpad = pd.DataFrame(fill_value, columns=df.columns, index=idx[:-pad])
-    zpad.index.name = df.index.name
-    zpad.update(df)
-    return zpad
+    start = start or df.index.min()
+    if pd.isnull(start):
+        idx = []
+    else:
+        idx = [d.strftime("%Y-%m")
+               for d in pd.date_range(start, 'now', freq="M")][:-pad]
+    return df.reindex(idx, fill_value=fill_value)
 
 
 def zeropad(fill_value):
@@ -69,6 +72,8 @@ def clean_email(raw_email):
         uname, domain = email.split("@")
     except ValueError:
         raise ValueError("Invalid email")
+    uname = uname.rsplit(" ", 1)[-1]
+    domain = domain.split(" ", 1)[0]
 
     return "%s@%s" % (uname.split("+", 1)[0], domain)
 
@@ -88,10 +93,6 @@ def commit_user_stats(repo_name):
     stats = commits(repo_name)
     stats['author'] = stats['author'].fillna(DEFAULT_USERNAME)
     df = user_stats(stats, "authored_date", "commits")
-    # filter out first commits without date (1970-01-01)
-    # Git was created in 2005 but we need some slack because of imported repos
-    if not df.empty:
-        df = df.loc[df.index.get_level_values("authored_date") > MIN_DATE]
     return df
 
 
@@ -100,7 +101,8 @@ def commit_user_stats(repo_name):
 def commit_stats(repo_name):
     # type: (str) -> pd.DataFrame
     """Commits aggregated by month"""
-    return commit_user_stats(repo_name).groupby('authored_date').sum()
+    return commit_user_stats(repo_name).groupby(
+        'authored_date').sum()["commits"]
 
 
 @scraper_cache('aggregate')
@@ -108,20 +110,23 @@ def commit_stats(repo_name):
 def commit_users(repo_name):
     # type: (str) -> pd.DataFrame
     """Number of contributors by month"""
-    return commit_user_stats(repo_name).groupby('authored_date').count()
+    return commit_user_stats(repo_name).groupby(
+        'authored_date').count()["commits"].rename("users")
 
 
-# @scraper_cache('aggregate')
+@scraper_cache('aggregate')
 @zeropad(np.nan)
 def commit_gini(repo_name):
     # type: (str) -> pd.DataFrame
-    return commit_user_stats(repo_name).groupby("authored_date").aggregate(gini)
+    return commit_user_stats(repo_name).groupby(
+        "authored_date").aggregate(gini)['commits'].rename("gini")
 
 
 @zeropad(0)
 def contributions_quantile(repo_name, q):
     # type: (str, float) -> pd.DataFrame
-    return quantile(commit_user_stats(repo_name), "authored_date", q)
+    return quantile(commit_user_stats(repo_name),
+                    "authored_date", q)["commits"].rename("q%g" % (q*100))
 
 
 @scraper_cache('raw')
@@ -130,12 +135,7 @@ def issues(repo_name):
     return pd.DataFrame(
         github_api.repo_issues(repo_name),
         columns=['number', 'author', 'closed', 'created_at', 'updated_at',
-                 'closed_at', 'title'])
-
-
-@scraper_cache('aggregate', 2)
-def issue_user_stats(repo_name):
-    return user_stats(issues(repo_name), "created_at", "new_issues")
+                 'closed_at']).set_index('number', drop=True)
 
 
 @scraper_cache('aggregate')
@@ -168,6 +168,11 @@ def non_overlap(repo_name):
 @scraper_cache('aggregate')
 @zeropad(0)
 def new_issues(repo_name):
+    # type: (str) -> pd.Series
+    """New issues aggregated by month"""
+    return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
+
+
     # type: (str) -> pd.DataFrame
     """New issues aggregated by month"""
     return issue_user_stats(repo_name).groupby('created_at').sum()

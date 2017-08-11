@@ -1,6 +1,7 @@
 
 import os
 import time
+import logging
 from functools import wraps
 
 import pandas as pd
@@ -62,11 +63,28 @@ def fs_cache(app_name, idx=1, cache_type='', expires=DEFAULT_EXPIRY):
         def wrapper(*args):
             cache_fpath = get_cache_fname(cache_path, func, *args)
             if not expired(cache_fpath, expires):
-                return pd.read_csv(cache_fpath, index_col=range(idx),
-                                   encoding="utf8")
-            df = func(*args)
+                df = pd.read_csv(
+                    cache_fpath, index_col=range(idx), encoding="utf8")
+                if len(df.columns) == 1 and idx == 1:
+                    return df[df.columns[0]]
+                return df
+
+            res = func(*args)
+            if isinstance(res, pd.DataFrame):
+                df = res
+                if len(df.columns) == 1 and idx == 1:
+                    logging.warning(
+                        "Single column dataframe is returned by %s.\nSince it "
+                        "will cause inconsistent behavior with @fs_cache "
+                        "decorator, please consider changing result type "
+                        "to pd.Series", func.__name__)
+            elif isinstance(res, pd.Series):
+                df = pd.DataFrame(res)
+            else:
+                raise ValueError("Unsupported result type (pd.DataFrame or "
+                                 "pd.Series expected, got %s)" % type(res))
             df.to_csv(cache_fpath, float_format="%.2g", encoding="utf-8")
-            return df
+            return res
 
         return wrapper
     return decorator
