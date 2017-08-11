@@ -4,6 +4,7 @@ csv/*
 *.ipynb
 .ipynb*
 settings.py
+data/*
 */migrations/*
 
 # Byte-compiled / optimized / DLL files
