@@ -1,6 +1,5 @@
 
 from __future__ import print_function, unicode_literals
-import concurrent.futures
 
 import logging
 import argparse
@@ -9,24 +8,17 @@ import csv
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
+from common import threadpool
 from scraper import utils
 
 logging.basicConfig()
 logger = logging.getLogger('ghd.scraper')
 
 
-def collect(package):
-    logger.info("Processing %s %s", package['name'], package['github_url'])
-    utils.open_issues(package['github_url'])
-    utils.commit_stats(package['github_url'])
-
-
-class MyExecutor(object):
-    def submit(self, fn, *args):
-        fn(*args)
-
-    def shutdown(self):
-        pass
+def collect(package, url):
+    logger.info("Processing %s %s", package, url)
+    utils.open_issues(url)
+    utils.commit_stats(url)
 
 
 class Command(BaseCommand):
@@ -48,6 +40,22 @@ class Command(BaseCommand):
         logger.setLevel(20 if loglevel == 30 else loglevel)
 
         reader = csv.DictReader(options['input'])
+
+        workers = min(max(options['workers'], 1), threadpool.CPU_COUNT * 2)
+        tp = threadpool.ThreadPool(workers)
+
+        for package_name in utils.list_packages():
+            try:
+                p = utils.Package(package_name, save_path=save_path)
+            except utils.PackageDoesNotExist:
+                # some deleted packages aren't removed from the list
+                continue
+
+            logger.info("Processing %s", package_name)
+            tp.submit(target, p, callback=callback)
+
+        tp.shutdown()
+
 
         if options['workers'] > 1:
             executor = concurrent.futures.ThreadPoolExecutor(
