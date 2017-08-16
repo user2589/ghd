@@ -3,7 +3,6 @@ import os
 import sys
 import csv
 import logging
-import multiprocessing
 
 from django.core.management.base import BaseCommand
 
@@ -14,7 +13,6 @@ from common import threadpool
 
 logging.basicConfig()
 logger = logging.getLogger('ghd.scraper')
-CPU_COUNT = multiprocessing.cpu_count()
 
 
 class Command(BaseCommand):
@@ -65,7 +63,7 @@ class Command(BaseCommand):
             writer.writerows(rows)
             output.flush()
 
-        workers = min(max(options['workers'], 1), CPU_COUNT)
+        workers = min(max(options['workers'], 1), threadpool.CPU_COUNT)
         tp = threadpool.ThreadPool(workers)
 
         for package_name in utils.list_packages():

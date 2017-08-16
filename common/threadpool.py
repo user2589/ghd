@@ -1,6 +1,9 @@
 
 import threading
 import logging
+import multiprocessing
+
+CPU_COUNT = multiprocessing.cpu_count()
 
 
 class ThreadPool(object):
