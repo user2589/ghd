@@ -105,19 +105,9 @@ def _parse_ver(version):
 def compare_versions(ver1, ver2):
     # type: (str, str) -> int
     """Compares two version string, returning {-1|0|1} just as cmp().
-    >> compare_versions("0.1.1", "0.1.2")
-    -1
-    >> compare_versions("0.1.2", "0.1.1")
-    1
-    >> compare_versions("0.1", "0.1.1")
-    0
-    >> compare_versions("0.1.1rc1", "0.1.1a")
-    1
-    >> compare_versions("0.1.1rc1", "0.1.1")
-    -1
     """
-    chunks1 = _parse_ver(ver1)
-    chunks2 = _parse_ver(ver2)
+    chunks1 = _parse_ver(str(ver1))
+    chunks2 = _parse_ver(str(ver2))
     min_len = min(len(chunks1), len(chunks2))
     for i in range(min_len):
         if chunks1[i] > chunks2[i]:
@@ -316,6 +306,7 @@ class Package(object):
             return None
 
         info_path = self._info_path(ver)
+        dirname = info_path
         tl_fname = info_path and os.path.join(info_path, 'top_level.txt')
         if tl_fname and os.path.isfile(tl_fname):
             dirname = os.path.basename(open(tl_fname, 'r').read(80).strip())
@@ -325,7 +316,6 @@ class Package(object):
             dirname = self.name
             logger.debug("    .. assumed from project name")
         else:  # getting darker..
-            dirname = None
             for entry in os.listdir(extract_dir):
                 logger.debug("    .. guessing from the first match")
                 if os.path.isfile(
@@ -445,6 +435,3 @@ def packages_info():
 
         yield {'name': pkgname, 'github_url': p.github_url}
 
-if __name__ == "__main__":
-    import doctest
-    doctest.testmod()
