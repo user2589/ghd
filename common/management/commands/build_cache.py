@@ -2,68 +2,58 @@
 from __future__ import print_function, unicode_literals
 
 import logging
-import argparse
-import csv
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
 from common import threadpool
-from scraper import utils
+from common import utils
+from scraper import utils as scraper
 
 logging.basicConfig()
-logger = logging.getLogger('ghd.scraper')
+logger = logging.getLogger('ghd')
 
 
-def collect(package, url):
-    logger.info("Processing %s %s", package, url)
-    utils.open_issues(url)
-    utils.commit_stats(url)
+def collect_scraper(package, url):
+    logger.info("Processing %s", package)
+    scraper.commits(url)
+    scraper.issues(url)
+    scraper.open_issues(url)
+    scraper.commit_stats(url)
+
+
+def collect_common(ecosystem, metric):
+    logger.info("Processing %s", metric)
+    utils.clustering_data(ecosystem, metric)
 
 
 class Command(BaseCommand):
     requires_system_checks = False
-    help = "Download and store commit and issues data for specified GitHub " \
-           "repositories. Repositories are accepted as CSV records in the " \
-           "format produced by ./manage.py pypi_packages_info"
+    help = "Download and store commit and issues data for all packages in " \
+           "the specified ecosystem repositories."
 
     def add_arguments(self, parser):
-        parser.add_argument('-i', '--input', default="-",
-                            type=argparse.FileType('r'),
-                            help='File to use as input, empty or "-" for stdin')
+        parser.add_argument('ecosystem', type=str,
+                            help='Ecosystem to process, {pypi|npm}')
         num_tokens = len(getattr(settings, 'SCRAPER_GITHUB_API_TOKENS', []))
         parser.add_argument('-w', '--workers', default=1+num_tokens//2,
                             type=int, help='Number of workers to use')
 
     def handle(self, *args, **options):
         loglevel = 40 - 10*options['verbosity']
-        logger.setLevel(20 if loglevel == 30 else loglevel)
+        logger.setLevel(loglevel)
 
-        reader = csv.DictReader(options['input'])
+        import sys
+        sys.setrecursionlimit(20000)
 
         workers = min(max(options['workers'], 1), threadpool.CPU_COUNT * 2)
         tp = threadpool.ThreadPool(workers)
 
-        for package_name in utils.list_packages():
-            try:
-                p = utils.Package(package_name, save_path=save_path)
-            except utils.PackageDoesNotExist:
-                # some deleted packages aren't removed from the list
-                continue
+        urls = utils.package_urls(options['ecosystem'])
+        for package, url in urls.iteritems():
+            tp.submit(collect_scraper, package, url)
 
-            logger.info("Processing %s", package_name)
-            tp.submit(target, p, callback=callback)
+        for metric in utils.SUPPORTED_METRICS:
+            tp.submit(collect_common, options['ecosystem'], metric)
 
         tp.shutdown()
-
-
-        if options['workers'] > 1:
-            executor = concurrent.futures.ThreadPoolExecutor(
-                max_workers=options['workers'])
-        else:
-            executor = MyExecutor()
-
-        for package in reader:
-            if not package['github_url']:
-                continue
-            executor.submit(collect, package)

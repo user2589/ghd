@@ -11,10 +11,10 @@ import pandas as pd
 from django.core.management.base import BaseCommand
 
 from common import decorators
-from scraper import utils
+from scraper import utils as scraper
 
 logging.basicConfig()
-logger = logging.getLogger('ghd.scraper')
+logger = logging.getLogger('ghd')
 
 
 class Command(BaseCommand):
@@ -25,9 +25,8 @@ class Command(BaseCommand):
            "to run ./manage.py scraper_build_cache first."
 
     def add_arguments(self, parser):
-        parser.add_argument('-i', '--input', default="-",
-                            type=argparse.FileType('r'),
-                            help='File to use as input, empty or "-" for stdin')
+        parser.add_argument('ecosystem', type=str,
+                            help='Ecosystem to process, {pypi|npm}')
         parser.add_argument('-o', '--output', default="",
                             help='Output file. Will be extended if already '
                                  'exists')
@@ -54,14 +53,14 @@ class Command(BaseCommand):
             if not package['github_url']:
                 continue
 
-            commits = utils.commits(package['github_url'])
+            commits = scraper._commits(package['github_url'])
             commits = commits.loc[pd.notnull(commits['author_email']) & \
                                   pd.notnull(commits['author'])]
             for _, commit in commits.iterrows():
                 if not commit['author'] or not commit['author_email']:
                     continue
                 try:
-                    email = utils.clean_email(commit['author_email'])
+                    email = scraper.clean_email(commit['author_email'])
                 except ValueError:  # invalid email
                     continue
 
