@@ -425,9 +425,14 @@ class Package(object):
         return loc_size(path)
 
 
+@d.fs_cache("pypi")
 def list_packages():
+    # type: () -> pd.Series
     tree = ElementTree.fromstring(Package._request("simple/").content)
-    return [a.text for a in tree.iter('a')]
+    s = pd.Series(sorted(a.text.lower() for a in tree.iter('a')),
+                  name="packages")
+    s.index = s
+    return s
 
 
 def packages_info():

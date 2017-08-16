@@ -37,17 +37,17 @@ def expired(cache_fpath, expires):
            or time.time() - os.path.getmtime(cache_fpath) > expires
 
 
-def get_cache_fname(cache_path, func, *args):
-    cache_filename = ".".join([
-        func.__name__,
-        "_".join([str(arg).replace("/", ".") for arg in args]),
-        "csv"])
-    return os.path.join(cache_path, cache_filename)
+def get_cache_fname(cache_path, func_name, *args):
+    chunks = [func_name]
+    if args:
+        chunks.append("_".join([str(arg).replace("/", ".") for arg in args]))
+    chunks.append("csv")
+    return os.path.join(cache_path, ".".join(chunks))
 
 
 def invalidate(app_name, func, *args, **kwargs):
     cache_path = get_cache_path(app_name, **kwargs)
-    cache_fname = get_cache_fname(cache_path, func, *args)
+    cache_fname = get_cache_fname(cache_path, func.__name__, *args)
     if os.path.isfile(cache_fname):
         os.remove(cache_fname)
         return True
@@ -61,7 +61,7 @@ def fs_cache(app_name, idx=1, cache_type='', expires=DEFAULT_EXPIRY):
     def decorator(func):
         @wraps(func)
         def wrapper(*args):
-            cache_fpath = get_cache_fname(cache_path, func, *args)
+            cache_fpath = get_cache_fname(cache_path, func.__name__, *args)
             if not expired(cache_fpath, expires):
                 df = pd.read_csv(
                     cache_fpath, index_col=range(idx), encoding="utf8")
