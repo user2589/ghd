@@ -165,3 +165,84 @@ def connectivity(ecosystem):
             stats[row['project']] = len(projects[row['project']])
     # 1min
     return pd.concat(gen(), axis=1)
+
+
+@d.fs_cache('common')
+def dependencies(ecosystem):
+    es = _get_ecosystem(ecosystem)
+    packages = es.list_packages()
+    deps = es.deps_and_size().sort_values("date")
+    deps['dependencies'] = deps['dependencies'].fillna("")
+
+    def gen():
+        downstreams = {}
+
+        def snapshot(month):
+            return pd.Series(downstreams, index=packages, name=month).fillna("")
+
+        month = None
+        for package, row in deps.iterrows():
+            if month != row['date'][:7]:
+                if month is not None:
+                    yield snapshot(month)
+                month = row['date'][:7]
+                logger.info("Processing %s", month)
+            downstreams[package] = row['dependencies']
+        yield snapshot(month)
+
+    idx = [d.strftime("%Y-%m")  # start is around 2005
+           for d in pd.date_range(deps['date'].min(), 'now', freq="M")]
+
+    return pd.concat(gen(), axis=1).T.reindex(idx, fill_value="").T
+
+
+@d.fs_cache('common')
+def backward_dependencies(ecosystem):
+    es = _get_ecosystem(ecosystem)
+    packages = es.list_packages()
+    deps = es.deps_and_size().sort_values("date")
+    deps['dependencies'] = deps['dependencies'].fillna("")
+
+    def gen():
+        downstreams = {}
+
+        def snapshot(month):
+            s = pd.Series("", index=packages, name=month)
+            for downstream, ds in downstreams.items():
+                for upstream in ds:
+                    if upstream not in s:
+                        continue
+                    if s[upstream]:
+                        s[upstream] += "," + downstream
+                    else:
+                        s[upstream] = downstream
+            return s
+
+        month = None
+        for package, row in deps.iterrows():
+            if month != row['date'][:7]:
+                if month is not None:
+                    yield snapshot(month)
+                month = row['date'][:7]
+                logger.info("Processing %s", month)
+            ds = row['dependencies'].split(",") if row['dependencies'] else []
+            downstreams[package] = set(ds)
+        yield snapshot(month)
+
+    idx = [d.strftime("%Y-%m")  # start is around 2005
+           for d in pd.date_range(deps['date'].min(), 'now', freq="M")]
+    return pd.concat(gen(), axis=1).T.reindex(idx, fill_value="").T
+
+
+def count_dependencies(df):
+    # type: (pd.DataFrame) -> pd.DataFrame
+    # takes around 20s for full pypi history
+    def gen():
+        for _, row in df.iterrows():
+            try:
+                yield row.map(lambda s: s.count(",") + 1 if s and pd.notnull(s) else 0)
+            except:
+                print(_, row)
+                raise
+
+    return pd.concat(gen(), axis=1).T

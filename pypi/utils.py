@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """An abstraction of Python package repository API (PyPi API)."""
-from __future__ import print_function
+from __future__ import print_function, unicode_literals
 
 import os
 import sys
@@ -13,6 +13,8 @@ import re
 import json
 import shutil
 import logging
+
+import pandas as pd
 
 from common import decorators as d
 
@@ -434,4 +436,44 @@ def packages_info():
             continue
 
         yield {'name': pkgname, 'github_url': p.github_url}
+
+
+# we don't use d.fs_cache to reuse old file
+@d.fs_cache("pypi")
+def deps_and_size():
+    cache_path = d.get_cache_path('pypi')
+    fname = d.get_cache_fname(cache_path, ".deps_and_size.cache")
+
+    if os.path.isfile(fname):
+        logger.info("deps_and_size() cache file already exists. "
+                    "Existing records will be reused")
+        df = pd.read_csv(fname, index_col=["name"])
+    else:
+        logger.info("deps_and_size() cache file doesn't exists. "
+                    "Computing everything from scratch is a lengthy process "
+                    "and will likely take couple weeks.")
+        df = pd.DataFrame(
+            columns=['name', 'version', 'date', 'dependencies', 'size']
+        ).groupby(["name", "version"]).count()  # shorter way to multiindex
+
+    for package_name in list_packages():
+        logger.info("Processing %s", package_name)
+        try:
+            p = Package(package_name)
+        except PackageDoesNotExist:
+            # some deleted packages aren't removed from the list
+            continue
+
+        for label, date in p.releases():
+            if (p.name, label) not in df.index:
+                df.loc[(p.name, label)] = {
+                    'date': date,
+                    'dependencies': ",".join(p.dependencies(label)),
+                    'size': p.size(label)
+                }
+    # save updates
+    df.to_csv(fname)
+    return df.reset_index(0).set_index("name")
+
+
 
