@@ -10,18 +10,38 @@ import seaborn as sns
 from sklearn.cluster import KMeans
 
 from common import decorators as d
-from scraper import utils as scraper_utils
+from scraper import utils as scraper
 
-logger = logging.getLogger("ghd.common")
+logger = logging.getLogger("ghd")
+
+SUPPORTED_METRICS = {
+    'commits': scraper.commit_stats,
+    'contributors': scraper.commit_users,
+    'gini': scraper.commit_gini,
+    'q50': lambda repo: scraper.contributions_quantile(repo, 0.5),
+    'q70': lambda repo: scraper.contributions_quantile(repo, 0.7),
+    'issues': scraper.new_issues,
+    'closed_issues': scraper.closed_issues,
+    'non_dev_issues': scraper.non_dev_issue_stats,
+    'submitters': scraper.submitters,
+    # 'dependencies': None,  # should come from pypi
+    # 'size': None,
+    # 'connectivity': None,
+    # 'backports': None,
+}
+
+
+def _get_ecosystem(ecosystem):
+    assert ecosystem in ('pypi', 'npm'), "Ecosystem is not suppoerted"
+    return importlib.import_module(ecosystem + '.utils')
 
 
 @d.fs_cache('')
 def package_urls(ecosystem):
     # type: (str) -> pd.DataFrame
     """Get list of packages and their respective GitHub repositories"""
-    assert ecosystem in ('pypi', 'npm'), "Ecosystem is not suppoerted"
-    pkg = importlib.import_module(ecosystem + '.utils')
-    return pd.Series(pkg.packages_info()).dropna().rename("github_url")
+    es = _get_ecosystem(ecosystem)
+    return pd.Series(es.packages_info()).dropna().rename("github_url")
 
 
 @d.fs_cache('common')
@@ -38,9 +58,9 @@ def first_contrib_log(ecosystem):
     def gen():
         for package, url in package_urls(ecosystem).iteritems():
             logger.info("Processing %s (%s)", package, url)
-            cs = scraper_utils.commits(
+            cs = scraper.commits(
                 url)[['author', 'authored_date']].dropna()
-            cs = cs.loc[cs["authored_date"] > scraper_utils.MIN_DATE]
+            cs = cs.loc[cs["authored_date"] > scraper.MIN_DATE]
             if cs.empty:
                 continue
             cs['project'] = package
@@ -54,7 +74,7 @@ def first_contrib_log(ecosystem):
 def first_contrib_dates(ecosystem):
     # type: (str) -> pd.Series
     # ~100 without caching
-    return pd.Series({package: scraper_utils.commits(url)['authored_date'].min()
+    return pd.Series({package: scraper.commits(url)['authored_date'].min()
                       for package, url in package_urls(ecosystem).iteritems()})
 
 
@@ -63,22 +83,8 @@ def monthly_data(ecosystem, metric):
     # type: (str, str) -> pd.DataFrame
     # providers are expected to accept package github url
     # and return a single column dataframe
-    providers = {
-        'commits': scraper_utils.commit_stats,
-        'contributors': scraper_utils.commit_users,
-        'gini': scraper_utils.commit_gini,
-        'q50': lambda repo: scraper_utils.contributions_quantile(repo, 0.5),
-        'q70': lambda repo: scraper_utils.contributions_quantile(repo, 0.7),
-        'issues': scraper_utils.new_issues,
-        'non_dev_issues': scraper_utils.non_dev_issue_stats,
-        'submitters': scraper_utils.submitters,
-        # 'dependencies': None,
-        # 'size': None,
-        # 'connectivity': None,
-        # 'backports': None,
-    }
-    assert metric in providers, "Metric is not supported"
-    metric_provider = providers[metric]
+    assert metric in SUPPORTED_METRICS, "Metric is not supported"
+    metric_provider = SUPPORTED_METRICS[metric]
 
     def gen():
         for package, url in package_urls(ecosystem).iteritems():
@@ -147,7 +153,7 @@ def connectivity(ecosystem):
         projects = defaultdict(set)  # projects[proj] = set(projects connected)
         stats = pd.Series(0, index=package_urls("pypi").index)
 
-        month = scraper_utils.MIN_DATE
+        month = scraper.MIN_DATE
 
         for _, row in clog.iterrows():
             rmonth = row['authored_date'][:7]
@@ -246,3 +252,51 @@ def count_dependencies(df):
                 raise
 
     return pd.concat(gen(), axis=1).T
+
+
+@d.fs_cache('common')
+def monthly_dataset(ecosystem, start_date='2008'):
+    es = _get_ecosystem(ecosystem)
+    fcd = first_contrib_dates(ecosystem).dropna().str[:7]
+    fcd = fcd[fcd > start_date]
+    deps = es.deps_and_size()
+    # first_release_date
+    frd = deps["date"].groupby("name").min().reindex(fcd.index).fillna("9999")
+    # remove packages which were released before first commits
+    # usually those are imports from other VCSes
+    fcd = fcd[fcd <= frd]  # drops 623 packages
+    mddfs = {metric: monthly_data("pypi", metric)
+             for metric in ("commits", "contributors", "gini", "q50", "q70",
+                            "issues", "closed_issues", "submitters",
+                            "non_dev_issues")}
+    mddfs['connectivity'] = connectivity(ecosystem)
+    mddfs['upstreams'] = count_dependencies(dependencies(ecosystem))
+    mddfs['downstreams'] = count_dependencies(backward_dependencies(ecosystem))
+
+    def gen():
+        for package, start in fcd.iteritems():
+            logger.info("Processing %s", package)
+            idx = mddfs["commits"].loc[package, start:].index
+            df = pd.DataFrame({
+                'project': package,
+                'date': idx,
+                'age': np.arange(len(idx))
+            })
+            for metric, mddf in mddfs.items():
+                if package in mddf.index:
+                    df[metric] = mddf.loc[package, idx].fillna(0).values
+                else:  # upstream/downstream for packages without releases
+                    df[metric] = 0
+            yield df
+
+    return pd.concat(gen()).reset_index(drop=True)
+
+
+@d.fs_cache('common')
+def yearly_dataset(ecosystem, start_date='2008'):
+    md = monthly_dataset(ecosystem, start_date)
+    md['age'] = md['age'] // 12
+    yd = md.groupby(['project', 'age']).mean()
+    md['observations'] = 1
+    yd['observations'] = md[['project', 'age', 'observations']].groupby(['project', 'age']).sum()
+    return yd.loc[yd['observations'] == 12, [c for c in yd.columns if c != "observations"]]
