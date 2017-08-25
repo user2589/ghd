@@ -20,13 +20,6 @@ from common import decorators as d
 
 # TODO: bugtrack_url support
 
-# TODO: .whl support
-# - this is a zip format
-# - does not require sandbox
-# - need to extract completely (internal path is unknown)
-# - dependencies are in <something>.dist-info/metadata.json
-#   .run_requires.item.requires: list
-
 logger = logging.getLogger("ghd.pypi")
 PY3 = sys.version_info[0] > 2
 if PY3:

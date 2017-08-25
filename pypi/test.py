@@ -16,6 +16,7 @@ class TestPyPi(unittest.TestCase):
     def test_list_packages(self):
         packages = list(utils.list_packages())
         self.assertGreater(len(packages), 100000)
+        # fails on Python2 because of unicode
         self.assertTrue(all(isinstance(p, str) for p in packages))
         self.assertTrue(all(len(p) < 250 for p in packages))
 

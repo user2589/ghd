@@ -1,10 +1,9 @@
 # ===========================
 # COMMON DEPENDENCIES
 # ===========================
+fabric
 typing
 requests
-django>=1.10
-psycopg2
 matplotlib
 pandas
 numpy
@@ -16,12 +15,6 @@ seaborn
 # ===========================
 # libarchive requires sudo apt-get install libarchive-dev
 libarchive
-
-
-# ===========================
-# GHTORRENT
-# ===========================
-# the whole package is deprecated
 
 # ===========================
 # PYPI
