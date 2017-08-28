@@ -318,33 +318,27 @@ class AdjacencyHandler(SOHandler):
 
 def adjacency_matrix():
     # type: () -> pd.DataFrame
-    return parse(AdjacencyHandler).matrix
-
-
-# don't use fs_cache - pandas can't handle so big files
-def read_adjacency_matrix(fname):
-    # type: (str) -> pd.DataFrame
-    if not os.path.isfile(fname):
-        df = adjacency_matrix()
-        df.to_csv(fname, float_format="%.2g")
+    # the resulting matrix is huge and makes pd.read_csv to freeze
+    # thus, manual cache
+    fname = so_cache.get_cache_fname("adjacency")
+    if so_cache.expired(fname):
+        df = parse(AdjacencyHandler).matrix
+        df.to_csv(fname)
         return df
-    reader = csv.reader(open(fname))
-    # TODO: speedup using common.clustering_data example
-    names = reader.next()[1:]
-    # somehow float assignment + int conversion is faster
-    # https://stackoverflow.com/questions/41644059/
-    df = pd.DataFrame(0, dtype=np.float32, columns=names, index=names)
-    for row in reader:
-        tag = row[0]
-        # float16 is not big enough to hold some counts
-        df.loc[tag] = np.array(row[1:], dtype=np.float32)
-    return df.astype(np.uint32)
+    else:
+        reader = csv.reader(open(fname))
+        # TODO: speedup using common.clustering_data example
+        names = reader.next()[1:]
+        df = pd.DataFrame({row[0]: np.array(row[1:], dtype=np.float32)
+                           for row in reader},  columns=names)
+        # somehow float assignment + int conversion is faster
+        # https://stackoverflow.com/questions/41644059/
+        return df.astype(int)
 
 
 @so_cache
 def correlation(tag):
-    stat = read_adjacency_matrix(
-        os.path.join(d.DATASET_PATH, 'so.cache', 'adjacency.csv'))[tag]
+    stat = adjacency_matrix()[tag]
     return stat / stat[tag]
 
 

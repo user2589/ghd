@@ -26,53 +26,48 @@ DATASET_PATH = getattr(settings, 'DATASET_PATH', None) or \
 mkdir(DATASET_PATH)
 
 
-def get_cache_path(app_name, cache_type="", ds_path=DATASET_PATH):
-    if not app_name:
-        return ds_path
-    return mkdir(ds_path, app_name + ".cache", cache_type)
+def _argstring(*args):
+    return "_".join([str(arg).replace("/", ".") for arg in args])
 
 
-def expired(cache_fpath, expires):
-    return not os.path.isfile(cache_fpath) \
-           or time.time() - os.path.getmtime(cache_fpath) > expires
+class fs_cache(object):
 
+    def __init__(self, app_name, idx=1, cache_type='',
+                 expires=DEFAULT_EXPIRY, ds_path=DATASET_PATH):
+        self.expires = expires
+        self.idx = idx
+        if not app_name:
+            self.cache_path = ds_path
+        else:
+            self.cache_path = mkdir(ds_path, app_name + ".cache", cache_type)
 
-def get_cache_fname(cache_path, func_name, *args):
-    chunks = [func_name]
-    if args:
-        chunks.append("_".join([str(arg).replace("/", ".") for arg in args]))
-    chunks.append("csv")
-    return os.path.join(cache_path, ".".join(chunks))
+    def get_cache_fname(self, func_name, *args):
+        chunks = [func_name]
+        if args:
+            chunks.append(_argstring(*args))
+        chunks.append("csv")
+        return os.path.join(self.cache_path, ".".join(chunks))
 
+    def expired(self, cache_fpath):
+        return not os.path.isfile(cache_fpath) \
+               or time.time() - os.path.getmtime(cache_fpath) > self.expires
 
-def invalidate(app_name, func, *args, **kwargs):
-    cache_path = get_cache_path(app_name, **kwargs)
-    cache_fname = get_cache_fname(cache_path, func.__name__, *args)
-    if os.path.isfile(cache_fname):
-        os.remove(cache_fname)
-        return True
-    return False
-
-
-def fs_cache(app_name, idx=1, cache_type='', expires=DEFAULT_EXPIRY):
-    # type: (str, int, str, int) -> callable
-    cache_path = get_cache_path(app_name, cache_type)
-
-    def decorator(func):
+    def __call__(self, func):
         @wraps(func)
         def wrapper(*args):
-            cache_fpath = get_cache_fname(cache_path, func.__name__, *args)
-            if not expired(cache_fpath, expires):
+            cache_fpath = self.get_cache_fname(func.__name__, *args)
+
+            if not self.expired(cache_fpath):
                 df = pd.read_csv(
-                    cache_fpath, index_col=range(idx), encoding="utf8")
-                if len(df.columns) == 1 and idx == 1:
+                    cache_fpath, index_col=range(self.idx), encoding="utf8")
+                if len(df.columns) == 1 and self.idx == 1:
                     return df[df.columns[0]]
                 return df
 
             res = func(*args)
             if isinstance(res, pd.DataFrame):
                 df = res
-                if len(df.columns) == 1 and idx == 1:
+                if len(df.columns) == 1 and self.idx == 1:
                     logging.warning(
                         "Single column dataframe is returned by %s.\nSince it "
                         "will cause inconsistent behavior with @fs_cache "
@@ -85,9 +80,13 @@ def fs_cache(app_name, idx=1, cache_type='', expires=DEFAULT_EXPIRY):
                                  "pd.Series expected, got %s)" % type(res))
             df.to_csv(cache_fpath, float_format="%.2g", encoding="utf-8")
             return res
-
         return wrapper
-    return decorator
+
+    def invalidate(self, func):
+        """ Remove all files caching this function """
+        for fname in os.listdir(self.cache_path):
+            if fname.startswith(func.__name__):
+                os.remove(os.path.join(self.cache_path, fname))
 
 
 def typed_fs_cache(app_name, expires=DEFAULT_EXPIRY):
@@ -98,7 +97,21 @@ def typed_fs_cache(app_name, expires=DEFAULT_EXPIRY):
     return _cache
 
 
+def memoize(func):
+    """ Classical memoize for non-class methods """
+    cache = {}
+
+    @wraps(func)
+    def wrapper(*args):
+        key = "__".join(str(arg) for arg in args)
+        if key not in cache:
+            cache[key] = func(*args)
+        return cache[key]
+    return wrapper
+
+
 def cached_method(func):
+    """ Classical memoize for non-class methods """
     @wraps(func)
     def wrapper(self, *args):
         if not hasattr(self, "_cache"):

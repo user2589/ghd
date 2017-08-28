@@ -35,6 +35,8 @@ TIMEOUT = 10
 # path to provided shell scripts
 _PATH = os.path.dirname(__file__) or '.'
 
+pypi_cache = d.fs_cache('pypi')
+
 # supported formats and extraction commands
 unzip = 'unzip -qq -o "%(fname)s" -d "%(dir)s" 2>/dev/null'
 untgz = 'tar -C "%(dir)s" --strip-components 1 -zxf "%(fname)s" 2>/dev/null'
@@ -410,7 +412,7 @@ class Package(object):
         return loc_size(path)
 
 
-@d.fs_cache("pypi")
+@pypi_cache
 def list_packages():
     # type: () -> pd.Series
     tree = ElementTree.fromstring(Package._request("simple/").content)
@@ -431,11 +433,12 @@ def packages_info():
         yield {'name': pkgname, 'github_url': p.github_url}
 
 
-# we don't use d.fs_cache to reuse old file
-@d.fs_cache("pypi")
+# Note that this method already uses internal cache. However, we probably don't
+# want to update this cache every time; thus, we have additional caching with
+# @fs_cache instance to make updates in 3 month (d.DEFAULT_EXPIRY) increments
+@pypi_cache
 def deps_and_size():
-    cache_path = d.get_cache_path('pypi')
-    fname = d.get_cache_fname(cache_path, ".deps_and_size.cache")
+    fname = pypi_cache.get_cache_fname(".deps_and_size.cache")
 
     if os.path.isfile(fname):
         logger.info("deps_and_size() cache file already exists. "
