@@ -22,7 +22,7 @@ from common import decorators as d
 DATASET_PATH = d.DATASET_PATH
 DATASET_PARTS = {
     'Comments', 'PostHistory', 'PostLinks', 'Posts', 'Tags', 'Users', 'Votes'}
-_online_ver = None
+
 logger = logging.getLogger('ghd.so')
 
 so_cache = d.fs_cache('so')
@@ -49,6 +49,7 @@ def get_mtime(dataset_part):
         os.path.getmtime(fname)).strftime("%Y-%m-%d")
 
 
+@d.memoize
 def online_ver():
     # type: () -> Optional[str]
     """Get last available version of StackOverflow Archive
@@ -59,7 +60,7 @@ def online_ver():
         logger.warning("can't retrieve SO Archive page, assuming up to date")
         return None
 
-    m = re.search("Published.+?search\.php\?query=date:(\d{4}-\d\d-\d\d)",
+    m = re.search("search\.php\?query=date:(\d{4}-\d\d-\d\d)",
                   r.text)
     if not m:
         logger.warning("Can't find release date, assuming up to date")
