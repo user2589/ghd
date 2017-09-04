@@ -330,7 +330,7 @@ def adjacency_matrix():
         # TODO: speedup using common.clustering_data example
         names = reader.next()[1:]
         df = pd.DataFrame({row[0]: np.array(row[1:], dtype=np.float32)
-                           for row in reader},  columns=names)
+                           for row in reader},  index=names).T
         # somehow float assignment + int conversion is faster
         # https://stackoverflow.com/questions/41644059/
         return df.astype(int)

@@ -10,7 +10,7 @@ import seaborn as sns
 from sklearn.cluster import KMeans
 
 from common import decorators as d
-from scraper import utils as scraper
+import scraper
 
 logger = logging.getLogger("ghd")
 
@@ -33,7 +33,7 @@ SUPPORTED_METRICS = {
 
 def _get_ecosystem(ecosystem):
     assert ecosystem in ('pypi', 'npm'), "Ecosystem is not suppoerted"
-    return importlib.import_module(ecosystem + '.utils')
+    return importlib.import_module(ecosystem)
 
 
 @d.fs_cache('')

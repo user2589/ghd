@@ -5,7 +5,7 @@ import datetime
 
 from django.core.management.base import BaseCommand
 
-from scraper import github
+import scraper
 
 
 class Command(BaseCommand):
@@ -13,7 +13,7 @@ class Command(BaseCommand):
     help = "Check limits on registered GitHub API keys"
 
     def handle(self, *args, **options):
-        api = github.API()
+        api = scraper.GitHubAPI()
         now = datetime.datetime.now()
         for key, (remaining, next_update) in api.check_limits().items():
             if next_update is None:

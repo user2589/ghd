@@ -34,7 +34,7 @@ Only 7 projects (1 commit each) have such commits, so they are safe to ignore
 
 MIN_DATE = "1997"
 DEFAULT_USERNAME = "-"
-github_api = github.API()
+github_api = github.GitHubAPI()
 scraper_cache = decorators.typed_fs_cache('scraper')
 
 logger = logging.getLogger("ghd.scraper")

@@ -20,7 +20,7 @@ class RepoDoesNotExist(requests.HTTPError):
     pass
 
 
-class API(object):
+class GitHubAPI(object):
     """ This is a convenience class to pool GitHub API keys and update their
     limits after every request. Actual work is done by outside classes, such
     as _IssueIterator and _CommitIterator
@@ -34,7 +34,7 @@ class API(object):
     def __new__(cls):
         # basic Singleton implementation
         if not isinstance(cls._instance, cls):
-            cls._instance = super(API, cls).__new__(cls)
+            cls._instance = super(GitHubAPI, cls).__new__(cls)
         return cls._instance
 
     def __init__(self, tokens=_tokens, timeout=30):
@@ -81,8 +81,9 @@ class API(object):
                            if reset_time is not None)
             sleep = int(next_res - time.time()) + 1
             if sleep > 0:
-                logger.info("%s: out of keys, resuming in %d minutes, %d seconds",
-                            datetime.now().strftime("%H:%M"), *divmod(sleep, 60))
+                logger.info(
+                    "%s: out of keys, resuming in %d minutes, %d seconds",
+                    datetime.now().strftime("%H:%M"), *divmod(sleep, 60))
                 time.sleep(sleep)
                 logger.info(".. resumed")
 
