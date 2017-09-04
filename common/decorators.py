@@ -41,11 +41,11 @@ class fs_cache(object):
         else:
             self.cache_path = mkdir(ds_path, app_name + ".cache", cache_type)
 
-    def get_cache_fname(self, func_name, *args):
+    def get_cache_fname(self, func_name, *args, **kwargs):
         chunks = [func_name]
         if args:
             chunks.append(_argstring(*args))
-        chunks.append("csv")
+        chunks.append(kwargs.get("extension", "csv"))
         return os.path.join(self.cache_path, ".".join(chunks))
 
     def expired(self, cache_fpath):
