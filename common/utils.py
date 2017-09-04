@@ -173,85 +173,63 @@ def connectivity(ecosystem):
     return pd.concat(gen(), axis=1)
 
 
-@d.fs_cache('common')
-def dependencies(ecosystem):
+def upstreams(ecosystem):
+    # type: (str) -> pd.DataFrame
+    # ~12s without caching
     es = _get_ecosystem(ecosystem)
-    packages = es.list_packages()
     deps = es.deps_and_size().sort_values("date")
-    deps['dependencies'] = deps['dependencies'].fillna("")
-
-    def gen():
-        downstreams = {}
-
-        def snapshot(month):
-            return pd.Series(downstreams, index=packages, name=month).fillna("")
-
-        month = None
-        for package, row in deps.iterrows():
-            if month != row['date'][:7]:
-                if month is not None:
-                    yield snapshot(month)
-                month = row['date'][:7]
-                logger.info("Processing %s", month)
-            downstreams[package] = row['dependencies']
-        yield snapshot(month)
+    deps['dependencies'] = deps['dependencies'].map(
+        lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
 
     idx = [d.strftime("%Y-%m")  # start is around 2005
            for d in pd.date_range(deps['date'].min(), 'now', freq="M")]
 
-    return pd.concat(gen(), axis=1).T.reindex(idx, fill_value="").T
+    df = deps.groupby([deps.index, deps['date'].str[:7]])['dependencies'].last()
+    return df.unstack(level=-1).T.reindex(idx).fillna(method='ffill').T
 
 
-@d.fs_cache('common')
-def backward_dependencies(ecosystem):
-    es = _get_ecosystem(ecosystem)
-    packages = es.list_packages()
-    deps = es.deps_and_size().sort_values("date")
-    deps['dependencies'] = deps['dependencies'].fillna("")
+def downstreams(ecosystem):
+    # type: (str) -> pd.DataFrame
+    # ~35s without caching
+    uss = upstreams(ecosystem)
 
     def gen():
-        downstreams = {}
+        for month in uss.columns:
+            s = defaultdict(set)
+            for pkg, dss in uss[month].iteritems():
+                if dss and pd.notnull(dss):
+                    # add package as downstream to each of upstreams
+                    for ds in dss:
+                        s[ds].add(pkg)
+            yield pd.Series(s, name=month, index=uss.index)
 
-        def snapshot(month):
-            s = pd.Series("", index=packages, name=month)
-            for downstream, ds in downstreams.items():
-                for upstream in ds:
-                    if upstream not in s:
-                        continue
-                    if s[upstream]:
-                        s[upstream] += "," + downstream
-                    else:
-                        s[upstream] = downstream
-            return s
+    return pd.DataFrame(gen()).T
 
-        month = None
-        for package, row in deps.iterrows():
-            if month != row['date'][:7]:
-                if month is not None:
-                    yield snapshot(month)
-                month = row['date'][:7]
-                logger.info("Processing %s", month)
-            ds = row['dependencies'].split(",") if row['dependencies'] else []
-            downstreams[package] = set(ds)
-        yield snapshot(month)
 
-    idx = [d.strftime("%Y-%m")  # start is around 2005
-           for d in pd.date_range(deps['date'].min(), 'now', freq="M")]
-    return pd.concat(gen(), axis=1).T.reindex(idx, fill_value="").T
+def cumulative_dependencies(deps):
+    def gen():
+        for month, dependencies in deps.T.iterrows():
+            cumulative_upstreams = {}
+
+            def traverse(pkg):
+                if pkg not in cumulative_upstreams:
+                    cumulative_upstreams[pkg] = set()  # prevent infinite loop
+                    ds = dependencies[pkg]
+                    if ds and pd.notnull(ds):
+                        cumulative_upstreams[pkg] = set.union(
+                            ds, *(traverse(d) for d in ds if d in dependencies))
+                return cumulative_upstreams[pkg]
+
+            yield pd.Series(dependencies.index, index=dependencies.index).map(
+                traverse).rename(month)
+
+    return pd.concat(gen(), axis=1)
 
 
 def count_dependencies(df):
     # type: (pd.DataFrame) -> pd.DataFrame
     # takes around 20s for full pypi history
-    def gen():
-        for _, row in df.iterrows():
-            try:
-                yield row.map(lambda s: s.count(",") + 1 if s and pd.notnull(s) else 0)
-            except:
-                print(_, row)
-                raise
-
-    return pd.concat(gen(), axis=1).T
+    return df.applymap(lambda s: len(s) if s and pd.notnull(s) else 0)
 
 
 @d.fs_cache('common')
@@ -270,8 +248,8 @@ def monthly_dataset(ecosystem, start_date='2008'):
                             "issues", "closed_issues", "submitters",
                             "non_dev_issues")}
     mddfs['connectivity'] = connectivity(ecosystem)
-    mddfs['upstreams'] = count_dependencies(dependencies(ecosystem))
-    mddfs['downstreams'] = count_dependencies(backward_dependencies(ecosystem))
+    mddfs['upstreams'] = count_dependencies(upstreams(ecosystem))
+    mddfs['downstreams'] = count_dependencies(downstreams(ecosystem))
 
     def gen():
         for package, start in fcd.iteritems():
@@ -292,11 +270,9 @@ def monthly_dataset(ecosystem, start_date='2008'):
     return pd.concat(gen()).reset_index(drop=True)
 
 
-@d.fs_cache('common')
-def yearly_dataset(ecosystem, start_date='2008'):
-    md = monthly_dataset(ecosystem, start_date)
-    md['age'] = md['age'] // 12
-    yd = md.groupby(['project', 'age']).mean()
-    md['observations'] = 1
-    yd['observations'] = md[['project', 'age', 'observations']].groupby(['project', 'age']).sum()
-    return yd.loc[yd['observations'] == 12, [c for c in yd.columns if c != "observations"]]
+def yearly_dataset(md):
+    gc = md.drop('age', axis=1).groupby(['project', md['age'] // 12])
+    yd = gc.mean()
+    yd['observations'] = gc.agg({'project': 'count'})
+    return yd.loc[yd['observations'] == 12].drop(
+        'observations', axis=1).reset_index().set_index("project")
