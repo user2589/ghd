@@ -4,6 +4,7 @@ from __future__ import print_function, unicode_literals
 import datetime
 
 from django.core.management.base import BaseCommand
+import pandas as pd
 
 import scraper
 
@@ -15,11 +16,19 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         api = scraper.GitHubAPI()
         now = datetime.datetime.now()
+        df = pd.DataFrame(columns=("requests", "renews in", "key"))
+
         for key, (remaining, next_update) in api.check_limits().items():
             if next_update is None:
-                renew = '..not going to happen'
+                renew = 'never'
             else:
                 timediff = datetime.datetime.fromtimestamp(next_update) - now
-                renew = "in %d minutes %d seconds" % divmod(timediff.seconds, 60)
-            print("{0}: {1: >4} requests remaining, renew in {2}".format(
-                  key, remaining, renew))
+                renew = "%dm%ds" % divmod(timediff.seconds, 60)
+
+            df.loc[api.usernames[key]] = {
+                'requests': remaining,
+                'renews in': renew,
+                'key': key
+            }
+
+        print(df)

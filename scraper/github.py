@@ -30,6 +30,7 @@ class GitHubAPI(object):
     api_v4_url = api_url + "graphql"
 
     tokens = None  # token: remaining limit, reset timestamp
+    usernames = {}  # token: username, checked in check/limits
 
     def __new__(cls):
         # basic Singleton implementation
@@ -99,15 +100,14 @@ class GitHubAPI(object):
     def check_limits(self):
         # type: () -> dict
         for token in self.tokens:
-            r = requests.get(self.api_url,
+            r = requests.get(self.api_url + "user",
                              headers={"Authorization": "token " + token})
-            if 'X-RateLimit-Remaining' in r.headers:
-                remaining = int(r.headers['X-RateLimit-Remaining'])
-                reset_time = int(r.headers['X-RateLimit-Reset'])
-            else:
-                remaining = 0
-                reset_time = None  # prevent from using
+            remaining = int(r.headers.get('X-RateLimit-Remaining', 0))
+            reset_time = r.headers.get('X-RateLimit-Reset')
+            if reset_time is not None:  # otherwise prevent from using
+                reset_time = int(reset_time)
             self.tokens[token] = (remaining, reset_time)
+            self.usernames[token] = r.json().get('login', "<unknown>")
 
         return self.tokens
 
