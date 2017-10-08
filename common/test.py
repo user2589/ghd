@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 
 from common import decorators as d
-import common
+from common import utils as common
 
 
 def series(length, *args):

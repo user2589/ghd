@@ -5,10 +5,16 @@ import os
 
 from fabric import api as fab
 
+import settings
+
+fab.env.hosts = settings.DEPLOY_HOSTS
+
 
 def test():
-    fab.local("python -m unittest pypi.test")
-    fab.local("python -m unittest scraper.test")
+    with fab.settings(warn_only=True):
+        fab.local("python -m unittest common.test")
+        fab.local("python -m unittest pypi.test")
+        fab.local("python -m unittest scraper.test")
 
 
 def clean():
@@ -26,3 +32,11 @@ def install():
         if os.system("dpkg -l %s > /dev/null 2> /dev/null" % req) > 0:
             fab.sudo("apt-get -y install " + req)
     fab.local("pip install --user -r requirements.txt")
+
+
+def deploy():
+    test()
+    fab.local('git push')
+    # TODO: check whether ghd folder exists
+    fab.run('cd ghd && git pull')
+    fab.put('settings.py', 'ghd/')
