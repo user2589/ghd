@@ -268,7 +268,7 @@ def submitters(repo_name):
     # type: (str) -> pd.Series
     """New issues aggregated by month"""
     return issue_user_stats(repo_name).groupby(
-        'created_at').sum()["new_issues"].rename("submitters")
+        'created_at').count()["new_issues"].rename("submitters")
 
 
 @scraper_cache('aggregate')
