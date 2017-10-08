@@ -25,6 +25,7 @@ SUPPORTED_METRICS = {
     'gini': scraper.commit_gini,
     'q50': lambda repo: scraper.contributions_quantile(repo, 0.5),
     'q70': lambda repo: scraper.contributions_quantile(repo, 0.7),
+    'q90': lambda repo: scraper.contributions_quantile(repo, 0.9),
     'issues': scraper.new_issues,
     'closed_issues': scraper.closed_issues,
     'non_dev_issues': scraper.non_dev_issue_stats,
@@ -91,6 +92,11 @@ def first_contrib_dates(ecosystem):
 @d.fs_cache('common')
 def monthly_data(ecosystem, metric):
     # type: (str, str) -> pd.DataFrame
+    """
+    :param ecosystem: str
+    :param metric: str:
+    :return: pd.DataFrame
+    """
     # providers are expected to accept package github url
     # and return a single column dataframe
     assert metric in SUPPORTED_METRICS, "Metric is not supported"
@@ -264,6 +270,20 @@ def _fcd(ecosystem, start_date):
 
 
 @d.fs_cache('common')
+def dead_projects(ecosystem):
+    es = _get_ecosystem(ecosystem)
+    deps = es.deps_and_size()
+    commits = monthly_data(ecosystem, "commits")
+    last_release = deps[['date']].groupby("name").max()
+    death_date = pd.to_datetime(last_release['date'], format="%Y-%m-%d") + \
+        datetime.timedelta(days=365)
+    death_str = death_date.dt.strftime("%Y-%m-%d")
+
+    dead = pd.DataFrame([(death_str <= month).rename(month) for month in commits.columns]).T
+    sure_dead = (commits.T[::-1].rolling(
+                 window=12, min_periods=1).max() <= 1)[::-1].T.astype(bool)
+    dead.update(sure_dead)
+    return dead
 
 
 @d.fs_cache('common')
@@ -279,8 +299,25 @@ def monthly_dataset(ecosystem, start_date='2008'):
     mddfs['dead'] = dead_projects(ecosystem).loc[:, start_date:]
 
     mddfs['connectivity'] = connectivity(ecosystem)
-    mddfs['upstreams'] = count_dependencies(upstreams(ecosystem))
-    mddfs['downstreams'] = count_dependencies(downstreams(ecosystem))
+    _upstreams = upstreams(ecosystem).loc[
+        mddfs['dead'].index, mddfs['dead'].columns]
+    active_upstreams = _upstreams.where(~mddfs['dead'])
+    mddfs['upstreams'] = count_dependencies(_upstreams)
+    mddfs['c_upstreams'] = count_dependencies(
+        cumulative_dependencies(_upstreams))
+    mddfs['a_upstreams'] = count_dependencies(active_upstreams)
+    mddfs['ac_upstreams'] = count_dependencies(
+        cumulative_dependencies(active_upstreams))
+
+    _downstreams = downstreams(ecosystem).loc[
+        mddfs['dead'].index, mddfs['dead'].columns]
+    active_downstreams = _downstreams.where(~mddfs['dead'])
+    mddfs['downstreams'] = count_dependencies(_downstreams)
+    mddfs['c_downstreams'] = count_dependencies(
+        cumulative_dependencies(_downstreams))
+    mddfs['a_downstreams'] = count_dependencies(active_downstreams)
+    mddfs['ac_downstreams'] = count_dependencies(
+        cumulative_dependencies(active_downstreams))
 
     def gen():
         for package, start in fcd.iteritems():
