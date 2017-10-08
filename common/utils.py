@@ -1,6 +1,9 @@
 
+from __future__ import unicode_literals
+
 import logging
 import importlib
+import datetime
 from collections import defaultdict
 
 import pandas as pd
@@ -13,6 +16,8 @@ from common import decorators as d
 import scraper
 
 logger = logging.getLogger("ghd")
+
+SUPPORTED_ECOSYSTEMS = ('npm', 'pypi')
 
 SUPPORTED_METRICS = {
     'commits': scraper.commit_stats,
@@ -32,7 +37,12 @@ SUPPORTED_METRICS = {
 
 
 def _get_ecosystem(ecosystem):
-    assert ecosystem in ('pypi', 'npm'), "Ecosystem is not suppoerted"
+    """Returns an imported module for the ecosystem.
+    Basically, an importlib wrapper
+    :param ecosystem: str:{pypi|npm}
+    :return: module
+    """
+    assert ecosystem in SUPPORTED_ECOSYSTEMS, "Ecosystem is not supported"
     return importlib.import_module(ecosystem)
 
 
@@ -96,6 +106,12 @@ def monthly_data(ecosystem, metric):
 
 @d.fs_cache('common')
 def clustering_data(ecosystem, metric):
+    # type: (str, str) -> pd.DataFrame
+    """
+    :param ecosystem: str
+    :param metric: str:
+    :return: pd.DataFrame
+    """
     def gen():
         start_dates = first_contrib_dates(ecosystem).dropna().str[:7]
         ms = monthly_data(ecosystem, metric)
@@ -188,10 +204,13 @@ def upstreams(ecosystem):
     return df.unstack(level=-1).T.reindex(idx).fillna(method='ffill').T
 
 
-def downstreams(ecosystem):
-    # type: (str) -> pd.DataFrame
+def downstreams(uss):
+    """
+    :param uss: either ecosystem (pypi|npm) or an upstreams DataFrame
+    :return:
+    """
     # ~35s without caching
-    uss = upstreams(ecosystem)
+    uss = upstreams(uss)
 
     def gen():
         for month in uss.columns:
@@ -232,8 +251,7 @@ def count_dependencies(df):
     return df.applymap(lambda s: len(s) if s and pd.notnull(s) else 0)
 
 
-@d.fs_cache('common')
-def monthly_dataset(ecosystem, start_date='2008'):
+def _fcd(ecosystem, start_date):
     es = _get_ecosystem(ecosystem)
     fcd = first_contrib_dates(ecosystem).dropna().str[:7]
     fcd = fcd[fcd > start_date]
@@ -242,11 +260,24 @@ def monthly_dataset(ecosystem, start_date='2008'):
     frd = deps["date"].groupby("name").min().reindex(fcd.index).fillna("9999")
     # remove packages which were released before first commits
     # usually those are imports from other VCSes
-    fcd = fcd[fcd <= frd]  # drops 623 packages
-    mddfs = {metric: monthly_data("pypi", metric)
+    return fcd[fcd <= frd]  # drops 623 packages
+
+
+@d.fs_cache('common')
+
+
+@d.fs_cache('common')
+def monthly_dataset(ecosystem, start_date='2008'):
+    # TODO: more descriptive name to distinguish from monthly_data
+    fcd = _fcd(ecosystem, start_date)
+    mddfs = {metric: monthly_data(ecosystem, metric).loc[:, start_date:]
              for metric in ("commits", "contributors", "gini", "q50", "q70",
                             "issues", "closed_issues", "submitters",
                             "non_dev_issues")}
+
+    # definition of active: > 1 commit per month in a given year
+    mddfs['dead'] = dead_projects(ecosystem).loc[:, start_date:]
+
     mddfs['connectivity'] = connectivity(ecosystem)
     mddfs['upstreams'] = count_dependencies(upstreams(ecosystem))
     mddfs['downstreams'] = count_dependencies(downstreams(ecosystem))
@@ -271,6 +302,7 @@ def monthly_dataset(ecosystem, start_date='2008'):
 
 
 def yearly_dataset(md):
+    # DEPRECATED
     gc = md.drop('age', axis=1).groupby(['project', md['age'] // 12])
     yd = gc.mean()
     yd['observations'] = gc.agg({'project': 'count'})
