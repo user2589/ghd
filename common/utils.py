@@ -338,6 +338,31 @@ def monthly_dataset(ecosystem, start_date='2008'):
     return pd.concat(gen()).reset_index(drop=True)
 
 
+@d.fs_cache('common')
+def survival_data(ecosystem, start_date="2008"):
+    fcd = _fcd(ecosystem, start_date)
+    md = monthly_dataset("pypi", start_date)
+
+    window = 12  # right-censoring
+
+    def gen():
+        for project, _ in fcd.iteritems():
+            logger.info("Processing %s", project)
+            df = md.loc[md['project'] == project]
+            if len(df) > window:
+                df['dead'] = df['dead'].shift(-1).fillna(method='ffill').astype(int)
+                df = df.iloc[:-window]
+            else:
+                continue
+            dead = df.loc[df['dead'] > 0, ['dead']]
+            if not dead.empty:
+                df = df.loc[:dead.index[0]]
+            for _, row in df.iterrows():
+                yield row
+
+    return pd.DataFrame(gen(), columns=md.columns)
+
+
 def yearly_dataset(md):
     # DEPRECATED
     gc = md.drop('age', axis=1).groupby(['project', md['age'] // 12])
