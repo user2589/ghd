@@ -16,19 +16,27 @@ class Command(BaseCommand):
     def handle(self, *args, **options):
         api = scraper.GitHubAPI()
         now = datetime.datetime.now()
-        df = pd.DataFrame(columns=("requests", "renews in", "key"))
 
-        for key, (remaining, next_update) in api.check_limits().items():
-            if next_update is None:
-                renew = 'never'
-            else:
-                timediff = datetime.datetime.fromtimestamp(next_update) - now
-                renew = "%dm%ds" % divmod(timediff.seconds, 60)
+        df = pd.DataFrame(
+            columns=("core_limit", "core_remaining",
+                     "core_renews_in", "search_limit", "search_remaining",
+                     "search_renews_in", "key"))
+        for token in api.tokens:
+            user = token.user
+            values = {'key': token.token}
+            token._check_limits()
 
-            df.loc[api.usernames[key]] = {
-                'requests': remaining,
-                'renews in': renew,
-                'key': key
-            }
+            for api_class in token.limit:
+                # geez, this code smells
+                next_update = token.limit[api_class]['reset_time']
+                if next_update is None:
+                    renew = 'never'
+                else:
+                    tdiff = datetime.datetime.fromtimestamp(next_update) - now
+                    renew = "%dm%ds" % divmod(tdiff.seconds, 60)
+                values[api_class + '_renews_in'] = renew
+                values[api_class + '_limit'] = token.limit[api_class]['limit']
+                values[api_class + '_remaining'] = token.limit[api_class]['remaining']
+            df.loc[user] = values
 
         print(df)

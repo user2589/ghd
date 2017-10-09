@@ -20,17 +20,103 @@ class RepoDoesNotExist(requests.HTTPError):
     pass
 
 
+class TokenNotReady(requests.HTTPError):
+    pass
+
+
+class GitHubAPIToken(object):
+    api_url = "https://api.github.com/"
+
+    token = None
+    timeout = None
+    _user = None
+    _headers = None
+
+    limit = None  # see __init__ for more details
+
+    def __init__(self, token=None, timeout=None):
+        if token is not None:
+            self.token = token
+            self._headers = {"Authorization": "token " + token}
+        self.limit = {}
+        for api_class in ('core', 'search'):
+            self.limit[api_class] = {
+                'limit': None,
+                'remaining': None,
+                'reset_time': None
+            }
+        self.timeout = timeout
+        super(GitHubAPIToken, self).__init__()
+
+    @property
+    def user(self):
+        if self._user is None:
+            r = self.request('user')
+            self._user = r.json().get('login', '')
+        return self._user
+
+    def _check_limits(self):
+        # regular limits will be updaated automatically upon request
+        # we only need to take care about search limit
+        s = self.request('rate_limit').json()['resources']['search']
+        self.limit['search'] = {
+            'remaining': s['remaining'],
+            'reset_time': s['reset'],
+            'limit': s['limit']
+        }
+
+    @staticmethod
+    def api_class(url):
+        return 'search' if url.startswith('search') else 'core'
+
+    def ready(self, url):
+        t = self.when(url)
+        return not t or t <= time.time()
+
+    def legit(self):
+        if self.limit['core']['limit'] is None:
+            self._check_limits()
+        return self.limit['core']['limit'] < 100
+
+    def when(self, url):
+        key = self.api_class(url)
+        if self.limit[key]['remaining'] != 0:
+            return 0
+        return self.limit[key]['reset_time']
+
+    def request(self, url, method='get', data=None, **params):
+        # TODO: use coroutines, perhaps Tornado (as PY2/3 compatible)
+
+        if not self.ready(url):
+            raise TokenNotReady
+        # Exact API version can be specified by Accept header:
+        # "Accept": "application/vnd.github.v3+json"}
+
+        # might throw a timeout
+        r = requests.request(
+            method, self.api_url + url, params=params, data=data,
+            headers=self._headers,  timeout=self.timeout)
+
+        if 'X-RateLimit-Remaining' in r.headers:
+            remaining = int(r.headers['X-RateLimit-Remaining'])
+            self.limit[self.api_class(url)] = {
+                'remaining': remaining,
+                'reset_time': int(r.headers['X-RateLimit-Reset']),
+                'limit': int(r.headers['X-RateLimit-Limit'])
+            }
+
+            if r.status_code == 403 and remaining == 0:
+                raise TokenNotReady
+        return r
+
+
 class GitHubAPI(object):
     """ This is a convenience class to pool GitHub API keys and update their
     limits after every request. Actual work is done by outside classes, such
     as _IssueIterator and _CommitIterator
     """
     _instance = None  # instance of API() for Singleton pattern implementation
-    api_url = "https://api.github.com/"
-    api_v4_url = api_url + "graphql"
-
-    tokens = None  # token: remaining limit, reset timestamp
-    usernames = {}  # token: username, checked in check/limits
+    tokens = None
 
     def __new__(cls):
         # basic Singleton implementation
@@ -40,35 +126,29 @@ class GitHubAPI(object):
 
     def __init__(self, tokens=_tokens, timeout=30):
         if not tokens:
-            raise EnvironmentError("No GitHub API tokens found in settings.py."
-                                   "Please add some.")
-        self.timeout = timeout
-        self.tokens = {t: (None, None) for t in tokens}
+            raise EnvironmentError(
+                "No GitHub API tokens found in settings.py. Please add some.")
+        self.tokens = [GitHubAPIToken(t, timeout=timeout) for t in tokens]
 
     def _request(self, url, method='get', data=None, **params):
         # type: (str, str, str) -> dict
         """ Generic, API version agnostic request method """
-        # TODO: use coroutines, perhaps Tornado (as PY2/3 compatible)
-        while True:
-            # TODO: sort keys to use next to expire first
-            for token, (remaining, reset_time) in self.tokens.items():
-                if remaining == 0 and reset_time > time.time():
-                    continue  # try another token
-                # Exact API version can be specified by Accept header:
-                # "Accept": "application/vnd.github.v3+json"}
-                try:
-                    r = requests.request(
-                        method, url, params=params, timeout=self.timeout,
-                        data=data, headers={"Authorization": "token " + token})
-                except requests.exceptions.Timeout:
-                    continue  # i.e. try again
+        timeout_counter = 0
 
-                if 'X-RateLimit-Remaining' in r.headers:
-                    remaining = int(r.headers['X-RateLimit-Remaining'])
-                    reset_time = int(r.headers['X-RateLimit-Reset'])
-                    self.tokens[token] = (remaining, reset_time)
-                    if r.status_code == 403 and remaining == 0:
-                        continue  # retry with another token
+        while True:
+            for token in sorted(self.tokens, key=lambda t: t.when(url)):
+                if not token.ready(url):
+                    continue
+
+                try:
+                    r = token.request(url, method=method, data=data, **params)
+                except TokenNotReady:
+                    continue
+                except requests.exceptions.Timeout:
+                    timeout_counter += 1
+                    if timeout_counter > len(self.tokens):
+                        raise
+                    continue  # i.e. try again
 
                 if r.status_code in (404, 451):  # API v3 only
                     raise RepoDoesNotExist
@@ -78,8 +158,7 @@ class GitHubAPI(object):
                 r.raise_for_status()
                 return r.json()
 
-            next_res = min(reset_time for _, reset_time in self.tokens.values()
-                           if reset_time is not None)
+            next_res = min(token.when(url) for token in self.tokens)
             sleep = int(next_res - time.time()) + 1
             if sleep > 0:
                 logger.info(
@@ -88,28 +167,12 @@ class GitHubAPI(object):
                 time.sleep(sleep)
                 logger.info(".. resumed")
 
-    def v3(self, url, method='get', data=None, **params):
-        # type: (str, str, str) -> Iterable[dict]
-        return self._request(self.api_url + url, method, data, **params)
+    v3 = _request
 
     def v4(self, query, **params):
         # type: (str) -> Iterable[dict]
         payload = json.dumps({"query": query, "variables": params})
-        return self._request(self.api_v4_url, 'post', payload)
-
-    def check_limits(self):
-        # type: () -> dict
-        for token in self.tokens:
-            r = requests.get(self.api_url + "user",
-                             headers={"Authorization": "token " + token})
-            remaining = int(r.headers.get('X-RateLimit-Remaining', 0))
-            reset_time = r.headers.get('X-RateLimit-Reset')
-            if reset_time is not None:  # otherwise prevent from using
-                reset_time = int(reset_time)
-            self.tokens[token] = (remaining, reset_time)
-            self.usernames[token] = r.json().get('login', "<unknown>")
-
-        return self.tokens
+        return self._request("graphql", 'post', payload)
 
     def repo_issues(self, repo_name, page=1):
         # type: (str, int) -> Iterable[dict]
