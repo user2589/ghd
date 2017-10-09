@@ -30,6 +30,7 @@ SUPPORTED_METRICS = {
     'closed_issues': scraper.closed_issues,
     'non_dev_issues': scraper.non_dev_issue_stats,
     'submitters': scraper.submitters,
+    'non_dev_submitters': scraper.non_dev_submitters,
     # 'dependencies': None,  # should come from pypi
     # 'size': None,
     # 'connectivity': None,

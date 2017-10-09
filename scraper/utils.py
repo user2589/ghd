@@ -1,4 +1,6 @@
 
+from __future__ import print_function
+
 import logging
 from functools import wraps
 from collections import defaultdict
@@ -132,7 +134,7 @@ def commits(repo_name, max_depth=30):
     children = defaultdict(set)
 
     for child, ps in cs['parents'].iteritems():
-        if pd.notnull(ps):
+        if pd.notnull(ps) and ps:
             parents[child] = set(ps.split("\n"))
             for parent in parents[child]:
                 children[parent].add(child)
@@ -254,12 +256,27 @@ def issue_user_stats(repo_name):
     return user_stats(issues(repo_name), "created_at", "new_issues")
 
 
+@scraper_cache('aggregate', 2)
+def non_dev_issue_user_stats(repo_name):
+    return user_stats(non_dev_issues(repo_name), "created_at", "new_issues")
+
+
 @scraper_cache('aggregate')
 @zeropad(0)
 def new_issues(repo_name):
     # type: (str) -> pd.Series
     """New issues aggregated by month"""
     return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
+
+
+@scraper_cache('aggregate')
+@zeropad(0)
+def non_dev_issue_stats(repo_name):
+    # type: (str) -> pd.Series
+    """Same as new_issues, not counting issues submitted by developers"""
+    i = non_dev_issues(repo_name)
+    return i.groupby(i['created_at'].str[:7]).count()['created_at'].rename(
+        "non_dev_issues")
 
 
 @scraper_cache('aggregate')
@@ -273,12 +290,11 @@ def submitters(repo_name):
 
 @scraper_cache('aggregate')
 @zeropad(0)
-def non_dev_issue_stats(repo_name):
+def non_dev_submitters(repo_name):
     # type: (str) -> pd.Series
     """New issues aggregated by month"""
-    i = non_dev_issues(repo_name)
-    return i.groupby(i['created_at'].str[:7]).count()['created_at'].rename(
-        "non_dev_issues")
+    return non_dev_issue_user_stats(repo_name).groupby(
+        'created_at').count()["new_issues"].rename("non_dev_submitters")
 
 
 @scraper_cache('aggregate')
