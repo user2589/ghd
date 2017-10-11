@@ -168,8 +168,49 @@ def tsplot(cdf, classes=None, title="", fname=None, figsize=None, **kwargs):
         plt.savefig(fname, bbox_inches='tight')
 
 
+def contributors(ecosystem, months=1):
+    # type: (str) -> pd.DataFrame
+    assert months > 0
+    """ Get a historical list of developers contributing to ecosystem projects
+    This function takes 7m20s for 54k PyPi projects @months=1, 23m20s@4
+    :param ecosystem: {"pypi"|"npm"}
+    :return: pd.DataFrame, index is projects, columns are months, cells are
+        sets of stirng github usernames
+    """
+    # fcd = first_contrib_dates(ecosystem).dropna()
+    start = "1998-01"  # fcd.min() starts at 1997-02
+    columns = [d.strftime("%Y-%m")
+               for d in pd.date_range(start, 'now', freq="M")][:-3]
+
+    def gen():
+        for package, repo in package_urls(ecosystem).iteritems():
+            logger.info("Processing %s: %s", package, repo)
+            s = scraper.commit_user_stats(repo).reset_index()[
+                ['authored_date', 'author']].groupby('authored_date').agg(
+                lambda df: set(df['author']))['author'].rename(
+                package).reindex(columns)
+            if months > 1:
+                s = pd.Series(
+                    (set().union(*[c for c in s[max(0, i - months + 1):i + 1]
+                                 if c and pd.notnull(c)])
+                     for i in range(len(columns))),
+                    index=columns, name=package)
+            yield s
+
+    return pd.DataFrame(gen(), columns=columns)
+
+
+@d.fs_cache('common')
+def active_contributors(ecosystem, months=1):
+    return count_dependencies(contributors(ecosystem, months))
+
+
 @d.fs_cache('common')
 def connectivity(ecosystem):
+    """ Number of projects focal project is connected to via its developers
+    :param ecosystem: {"pypi"|"npm"}
+    :return: pd.DataFrame, index is projects, columns are months
+    """
     def gen():
         clog = first_contrib_log(ecosystem)
         users = defaultdict(set)  # users[user] = set(projects participated)
@@ -212,9 +253,9 @@ def upstreams(ecosystem):
 
 
 def downstreams(uss):
-    """
+    """ Basically, reversed upstreams
     :param uss: either ecosystem (pypi|npm) or an upstreams DataFrame
-    :return:
+    :return: pd.DataFrame, df.loc[project, month] = set([*projects])
     """
     # ~35s without caching
     uss = upstreams(uss)

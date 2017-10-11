@@ -87,6 +87,22 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(counts.loc["django", month], 3247)
         self.assertEqual(counts.loc["six", month], 4425)
 
+    def test_active_contributors(self):
+        proj = "pandas"
+        es = "pypi"
+        c1 = common.active_contributors(es, 1)
+        self.assertTrue(isinstance(c1, pd.DataFrame))
+        self.assertGreater(c1.shape[0], 50000)
+        self.assertGreater(c1.shape[1], 230)
+        self.assertTrue(all(c >= 0 for c in c1))
+        c1 = c1.loc[proj]
+        c3 = common.active_contributors(es, 3).loc[proj]
+        if len(c1) < len(c3):
+            c3 = c3.reindex(c1.index)
+        elif len(c1) > len(c3):
+            c1 = c1.reindex(c3.index)
+        self.assertTrue(all(c3 >= c1))
+
     def test_cumulative_dependencies(self):
         month = "2017-05"
         deps = common.downstreams("pypi")
@@ -94,6 +110,7 @@ class TestUtils(unittest.TestCase):
         counts = common.count_dependencies(cumulative)
         self.assertEqual(counts.loc["django", month], 3796)
         self.assertEqual(counts.loc["six", month], 19995)
+
 
 if __name__ == "__main__":
     unittest.main()
