@@ -8,9 +8,6 @@ from collections import defaultdict
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.cluster import KMeans
 
 from common import decorators as d
 import scraper
@@ -31,10 +28,6 @@ SUPPORTED_METRICS = {
     'non_dev_issues': scraper.non_dev_issue_stats,
     'submitters': scraper.submitters,
     'non_dev_submitters': scraper.non_dev_submitters,
-    # 'dependencies': None,  # should come from pypi
-    # 'size': None,
-    # 'connectivity': None,
-    # 'backports': None,
 }
 
 
@@ -135,14 +128,6 @@ def head(cdf, years):
     return cdf.loc[pd.notnull(cdf.iloc[:, -1])]
 
 
-def cluster(cdf, n_clusters, years):
-    c = KMeans(n_clusters=n_clusters)
-    cdf = head(cdf, years)
-    classes = c.fit_predict(cdf.values)
-    predictions = pd.DataFrame(classes, index=cdf.index, columns=['class'])
-    return predictions
-
-
 def get_blank(cdf, classes=None):
     if classes is None:
         classes = pd.DataFrame(0, index=cdf.index, columns=['class'])
@@ -152,20 +137,6 @@ def get_blank(cdf, classes=None):
         np.repeat(np.arange(len(cdf)), len(cdf.columns)),  # unit
         np.repeat(classes.values, len(cdf.columns))  # condition
     ]).T, columns=['value', 'time', 'unit', 'condition'])
-
-
-def tsplot(cdf, classes=None, title="", fname=None, figsize=None, **kwargs):
-    # type: (pd.DataFrame, pd.DataFrame, str, str) -> None
-    cdf = cdf.loc[classes.index]
-    blank = get_blank(cdf, classes)
-    fig = plt.figure(figsize=figsize)
-    sns.tsplot(blank, value='value', time='time', unit='unit',
-               condition='condition', **kwargs)
-    if title:
-        plt.title(title)
-    plt.show()
-    if fname:
-        plt.savefig(fname, bbox_inches='tight')
 
 
 def contributors(ecosystem, months=1):
@@ -403,12 +374,3 @@ def survival_data(ecosystem, start_date="2008"):
                 yield row
 
     return pd.DataFrame(gen(), columns=md.columns)
-
-
-def yearly_dataset(md):
-    # DEPRECATED
-    gc = md.drop('age', axis=1).groupby(['project', md['age'] // 12])
-    yd = gc.mean()
-    yd['observations'] = gc.agg({'project': 'count'})
-    return yd.loc[yd['observations'] == 12].drop(
-        'observations', axis=1).reset_index().set_index("project")
