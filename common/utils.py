@@ -51,32 +51,6 @@ def package_urls(ecosystem):
 
 
 @fs_cache
-def first_contrib_log(ecosystem):
-    # type: (str) -> pd.DataFrame
-    """ Log of first contributions to a project by developers
-    :param ecosystem: str:{pypi|npm}
-    :return: pd.DataFrame with three columns:
-        authored_date: str, full date (e.g. 2017-05-01 16:45:01Z)
-        author: GitHub username of the author (unidentified authors are ignored)
-        project: package name in the ecosystem
-    """
-
-    def gen():
-        for package, url in package_urls(ecosystem).iteritems():
-            logger.info("Processing %s (%s)", package, url)
-            cs = scraper.commits(
-                url)[['author', 'authored_date']].dropna()
-            cs = cs.loc[cs["authored_date"] > scraper.MIN_DATE]
-            if cs.empty:
-                continue
-            cs['project'] = package
-            yield cs.groupby('author').min()
-
-    # only ~13m & 500M RAM; cached less than 1s
-    return pd.concat(gen(), axis=0).reset_index().sort_values("authored_date")
-
-
-@fs_cache
 def first_contrib_dates(ecosystem):
     # type: (str) -> pd.Series
     # ~100 without caching
@@ -102,42 +76,7 @@ def monthly_data(ecosystem, metric):
             logger.info("Processing %s", package)
             yield metric_provider(url).rename(package)
 
-    return pd.concat(gen(), axis=1).T
-
-
-@fs_cache
-def clustering_data(ecosystem, metric):
-    # type: (str, str) -> pd.DataFrame
-    """
-    :param ecosystem: str
-    :param metric: str:
-    :return: pd.DataFrame
-    """
-    def gen():
-        start_dates = first_contrib_dates(ecosystem).dropna().str[:7]
-        ms = monthly_data(ecosystem, metric)
-        for package, start in start_dates.iteritems():
-            logger.info("Processing %s", package)
-            yield ms.loc[package, start:].reset_index(drop=True)
-
-    return pd.concat(gen(), axis=1).T
-
-
-def head(cdf, years):
-    cdf.columns = [int(column) for column in cdf.columns]
-    cdf = cdf.iloc[:, :years * 12 - 1]
-    return cdf.loc[pd.notnull(cdf.iloc[:, -1])]
-
-
-def get_blank(cdf, classes=None):
-    if classes is None:
-        classes = pd.DataFrame(0, index=cdf.index, columns=['class'])
-    return pd.DataFrame(np.array([
-        cdf.values.ravel(),  # values
-        np.tile(np.arange(len(cdf.columns)), len(cdf)),  # time
-        np.repeat(np.arange(len(cdf)), len(cdf.columns)),  # unit
-        np.repeat(classes.values, len(cdf.columns))  # condition
-    ]).T, columns=['value', 'time', 'unit', 'condition'])
+    return pd.DataFrame(gen())
 
 
 def contributors(ecosystem, months=1):
@@ -152,7 +91,7 @@ def contributors(ecosystem, months=1):
     fname = fs_cache.get_cache_fname("contributors", ecosystem, months)
     if fs_cache.expired(fname):
         # fcd = first_contrib_dates(ecosystem).dropna()
-        start = "1998-01"  # fcd.min() starts at 1997-02
+        start = scraper.MIN_DATE
         columns = [d.strftime("%Y-%m")
                    for d in pd.date_range(start, 'now', freq="M")][:-3]
 
@@ -183,6 +122,7 @@ def contributors(ecosystem, months=1):
     df = pd.read_csv(fname, index_col=0, dtype=str)
     return df.applymap(
         lambda s: set(s.split(",")) if s and pd.notnull(s) else set())
+
 
 @fs_cache
 def active_contributors(ecosystem, months=1):
@@ -306,7 +246,8 @@ def dead_projects(ecosystem):
         datetime.timedelta(days=365)
     death_str = death_date.dt.strftime("%Y-%m-%d")
 
-    dead = pd.DataFrame([(death_str <= month).rename(month) for month in commits.columns]).T
+    dead = pd.DataFrame([(death_str <= month).rename(month)
+                         for month in commits.columns]).T
     sure_dead = (commits.T[::-1].rolling(
                  window=12, min_periods=1).max() <= 1)[::-1].T.astype(bool)
     dead.update(sure_dead)
