@@ -13,6 +13,7 @@ from common import decorators as d
 import scraper
 
 logger = logging.getLogger("ghd")
+fs_cache = d.fs_cache('common')
 
 SUPPORTED_ECOSYSTEMS = ('npm', 'pypi')
 
@@ -49,7 +50,7 @@ def package_urls(ecosystem):
     return pd.Series(es.packages_info()).dropna().rename("github_url")
 
 
-@d.fs_cache('common')
+@fs_cache
 def first_contrib_log(ecosystem):
     # type: (str) -> pd.DataFrame
     """ Log of first contributions to a project by developers
@@ -75,7 +76,7 @@ def first_contrib_log(ecosystem):
     return pd.concat(gen(), axis=0).reset_index().sort_values("authored_date")
 
 
-@d.fs_cache('common')
+@fs_cache
 def first_contrib_dates(ecosystem):
     # type: (str) -> pd.Series
     # ~100 without caching
@@ -83,7 +84,7 @@ def first_contrib_dates(ecosystem):
                       for package, url in package_urls(ecosystem).iteritems()})
 
 
-@d.fs_cache('common')
+@fs_cache
 def monthly_data(ecosystem, metric):
     # type: (str, str) -> pd.DataFrame
     """
@@ -104,7 +105,7 @@ def monthly_data(ecosystem, metric):
     return pd.concat(gen(), axis=1).T
 
 
-@d.fs_cache('common')
+@fs_cache
 def clustering_data(ecosystem, metric):
     # type: (str, str) -> pd.DataFrame
     """
@@ -148,64 +149,77 @@ def contributors(ecosystem, months=1):
     :return: pd.DataFrame, index is projects, columns are months, cells are
         sets of stirng github usernames
     """
-    # fcd = first_contrib_dates(ecosystem).dropna()
-    start = "1998-01"  # fcd.min() starts at 1997-02
-    columns = [d.strftime("%Y-%m")
-               for d in pd.date_range(start, 'now', freq="M")][:-3]
+    fname = fs_cache.get_cache_fname("contributors", ecosystem, months)
+    if fs_cache.expired(fname):
+        # fcd = first_contrib_dates(ecosystem).dropna()
+        start = "1998-01"  # fcd.min() starts at 1997-02
+        columns = [d.strftime("%Y-%m")
+                   for d in pd.date_range(start, 'now', freq="M")][:-3]
 
-    def gen():
-        for package, repo in package_urls(ecosystem).iteritems():
-            logger.info("Processing %s: %s", package, repo)
-            s = scraper.commit_user_stats(repo).reset_index()[
-                ['authored_date', 'author']].groupby('authored_date').agg(
-                lambda df: set(df['author']))['author'].rename(
-                package).reindex(columns)
-            if months > 1:
-                s = pd.Series(
-                    (set().union(*[c for c in s[max(0, i - months + 1):i + 1]
-                                 if c and pd.notnull(c)])
-                     for i in range(len(columns))),
-                    index=columns, name=package)
-            yield s
+        def gen():
+            for package, repo in package_urls(ecosystem).iteritems():
+                logger.info("Processing %s: %s", package, repo)
+                s = scraper.commit_user_stats(repo).reset_index()[
+                    ['authored_date', 'author']].groupby('authored_date').agg(
+                    lambda df: set(df['author']))['author'].rename(
+                    package).reindex(columns)
+                if months > 1:
+                    s = pd.Series(
+                        (set().union(*[c for c in s[max(0, i-months+1):i+1]
+                                     if c and pd.notnull(c)])
+                         for i in range(len(columns))),
+                        index=columns, name=package)
+                yield s
 
-    return pd.DataFrame(gen(), columns=columns)
+        df = pd.DataFrame(gen(), columns=columns)
 
+        # transform and write the dataframe
+        df.applymap(
+            lambda s: ",".join(str(u) for u in s) if s and pd.notnull(s) else ""
+        ).to_csv(fname)
 
-@d.fs_cache('common')
+        return df
+
+    df = pd.read_csv(fname, index_col=0, dtype=str)
+    return df.applymap(
+        lambda s: set(s.split(",")) if s and pd.notnull(s) else set())
+
+@fs_cache
 def active_contributors(ecosystem, months=1):
     return count_dependencies(contributors(ecosystem, months))
 
 
-@d.fs_cache('common')
-def connectivity(ecosystem):
+@fs_cache
+def connectivity(ecosystem, months=1000):
+    # type: (str, int) -> pd.DataFrame
     """ Number of projects focal project is connected to via its developers
+
     :param ecosystem: {"pypi"|"npm"}
+    :param months: number of months to lookbehind for shared contributors
+    :type ecosystem: str
+    :type months: int
     :return: pd.DataFrame, index is projects, columns are months
+    :rtype months: pd.DataFrame
     """
+    cs = contributors(ecosystem, months)
+
     def gen():
-        clog = first_contrib_log(ecosystem)
-        users = defaultdict(set)  # users[user] = set(projects participated)
-        projects = defaultdict(set)  # projects[proj] = set(projects connected)
-        stats = pd.Series(0, index=package_urls("pypi").index)
+        for month, row in cs.T.iterrows():
+            logger.info("Processing %s", month)
 
-        month = scraper.MIN_DATE
+            # users - users of the project we calculate connectivity for
+            # users2 - users of other project we check for connection
+            # "-" standa for anonymous user
+            # we need to subtract 1 because it overlaps with itself
+            yield pd.Series(
+                (sum(bool(not users.difference(["-"]).isdisjoint(users2))
+                     for users2 in row if users2 and pd.notnull(users2)) - 1
+                 if users and pd.notnull(users) else 0
+                    for project, users in row.iteritems()),
+                index=row.index, name=month
+            )
 
-        for _, row in clog.iterrows():
-            rmonth = row['authored_date'][:7]
-            if rmonth < month:  # i.e. < scraper.MIN_DATE
-                continue
-            elif rmonth > month:
-                yield stats.rename(month)
-                month = rmonth
-            for proj in users[row['author']]:
-                stats[proj] += 1
-            # this way project is connected to itself on its first commit
-            # it will get useful later, otherwise just subtract 1
-            users[row['author']].add(row['project'])
-            projects[row['project']] |= users[row['author']]
-            stats[row['project']] = len(projects[row['project']])
-    # 1min
-    return pd.concat(gen(), axis=1)
+    return pd.DataFrame(gen(), columns=cs.index).T
 
 
 def upstreams(ecosystem):
@@ -282,7 +296,7 @@ def _fcd(ecosystem, start_date):
     return fcd[fcd <= frd]  # drops 623 packages
 
 
-@d.fs_cache('common')
+@fs_cache
 def dead_projects(ecosystem):
     es = _get_ecosystem(ecosystem)
     deps = es.deps_and_size()
@@ -299,7 +313,7 @@ def dead_projects(ecosystem):
     return dead
 
 
-@d.fs_cache('common')
+@fs_cache
 def monthly_dataset(ecosystem, start_date='2008'):
     # TODO: more descriptive name to distinguish from monthly_data
     fcd = _fcd(ecosystem, start_date)
@@ -351,7 +365,7 @@ def monthly_dataset(ecosystem, start_date='2008'):
     return pd.concat(gen()).reset_index(drop=True)
 
 
-@d.fs_cache('common')
+@fs_cache
 def survival_data(ecosystem, start_date="2008"):
     fcd = _fcd(ecosystem, start_date)
     md = monthly_dataset("pypi", start_date)
