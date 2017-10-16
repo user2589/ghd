@@ -118,8 +118,7 @@ class GitHubAPI(object):
     _instance = None  # instance of API() for Singleton pattern implementation
     tokens = None
 
-    def __new__(cls):
-        # basic Singleton implementation
+    def __new__(cls):  # Singleton
         if not isinstance(cls._instance, cls):
             cls._instance = super(GitHubAPI, cls).__new__(cls)
         return cls._instance
@@ -130,7 +129,7 @@ class GitHubAPI(object):
                 "No GitHub API tokens found in settings.py. Please add some.")
         self.tokens = [GitHubAPIToken(t, timeout=timeout) for t in tokens]
 
-    def _request(self, url, method='get', data=None, **params):
+    def request(self, url, method='get', data=None, **params):
         # type: (str, str, str) -> dict
         """ Generic, API version agnostic request method """
         timeout_counter = 0
@@ -167,21 +166,12 @@ class GitHubAPI(object):
                 time.sleep(sleep)
                 logger.info(".. resumed")
 
-    v3 = _request
-
-    def v4(self, query, **params):
-        # type: (str) -> Iterable[dict]
-        payload = json.dumps({"query": query, "variables": params})
-        return self._request("graphql", 'post', payload)
-
     def repo_issues(self, repo_name, page=1):
         # type: (str, int) -> Iterable[dict]
         url = "repos/%s/issues" % repo_name
         while True:
-            try:
-                data = self.v3(url, per_page=100, page=page, state='all')
-            except RepoDoesNotExist:  # repository not found
-                break
+            # might throw RepoDoesNotExist
+            data = self.request(url, per_page=100, page=page, state='all')
 
             if not data:
                 break
@@ -199,15 +189,78 @@ class GitHubAPI(object):
                     }
             page += 1
 
-    def repo_issues_v4(self, repo_name, cursor=None):
+    def repo_commits(self, repo_name, page=1):
+        # type: (str, int) -> Iterable[dict]
+        # check repo_name follows pattern %owner/%repo
+        _, _ = repo_name.split("/")
+        url = "repos/%s/commits" % repo_name
+        while True:
+            # might throw RepoDoesNotExist
+            data = self.request(url, per_page=100, page=page)
+
+            if not data:
+                # no commits or page is too high. Last call could be saved  by
+                # checking response.headers['Link'], but it'll violate the
+                # abstraction
+                break
+
+            for commit in data:
+                # might be None for commits authored outside of github
+                github_author = commit['author'] or {}
+                commit_author = commit['commit'].get('author') or {}
+                yield {
+                    'sha': commit['sha'],
+                    'author': github_author.get('login'),
+                    'author_name': commit_author.get('name'),
+                    'author_email': commit_author.get('email'),
+                    'authored_date': commit_author.get('date'),
+                    'message': commit['commit']['message'],
+                    'committed_date': commit['commit']['committer']['date'],
+                    'parents': "\n".join(p['sha'] for p in commit['parents']),
+                    'verified': commit.get('verification', {}).get('verified')
+                }
+            page += 1
+
+    @staticmethod
+    def activity(repo_name):
+        # type: (str) -> dict
+        """Unofficial method to get top 100 contributors commits by week"""
+        url = "https://github.com/%s/graphs/contributors" % repo_name
+        headers = {
+            'X-Requested-With': 'XMLHttpRequest',
+            'Accept-Encoding': "gzip,deflate,br",
+            'Accept': "application/json",
+            'Origin': 'https://github.com',
+            'Referer': url,
+            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:53.0) "
+                          "Gecko/20100101 Firefox/53.0",
+            "Host": 'github.com',
+            "Accept-Language": 'en-US,en;q=0.5',
+            "Connection": "keep-alive",
+            "Cache-Control": 'max-age=0',
+        }
+        cookies = requests.get(url).cookies
+        r = requests.get(url + "-data", cookies=cookies, headers=headers)
+        r.raise_for_status()
+        return r.json()
+
+
+class GitHubAPIv4(GitHubAPI):
+
+    def v4(self, query, **params):
+        # type: (str) -> dict
+        payload = json.dumps({"query": query, "variables": params})
+        return self.request("graphql", 'post', payload)
+
+    def repo_issues(self, repo_name, cursor=None):
         # type: (str, str) -> Iterable[dict]
         owner, repo = repo_name.split("/")
         query = """query ($owner: String!, $repo: String!, $cursor: String) {
         repository(name: $repo, owner: $owner) {
           hasIssuesEnabled
-            issues (first: 100, after: $cursor, 
+            issues (first: 100, after: $cursor,
               orderBy: {field:CREATED_AT, direction: ASC}) {
-                nodes {author {login}, closed, createdAt, 
+                nodes {author {login}, closed, createdAt,
                        updatedAt, number, title}
                 pageInfo {endCursor, hasNextPage}
         }}}"""
@@ -234,41 +287,7 @@ class GitHubAPI(object):
             if not data["issues"]["pageInfo"]["hasNextPage"]:
                 break
 
-    def repo_commits(self, repo_name, page=1):
-        # type: (str, int) -> Iterable[dict]
-        # check repo_name follows pattern %owner/%repo
-        _, _ = repo_name.split("/")
-        url = "repos/%s/commits" % repo_name
-        while True:
-            try:
-                data = self.v3(url, per_page=100, page=page)
-            except RepoDoesNotExist:
-                break
-
-            if not data:
-                # no commits or page is too high. Last call could be saved  by
-                # checking response.headers['Link'], but it'll violate the
-                # abstraction
-                break
-
-            for commit in data:
-                # might be None for commits authored outside of github
-                github_author = commit['author'] or {}
-                commit_author = commit['commit'].get('author') or {}
-                yield {
-                    'sha': commit['sha'],
-                    'author': github_author.get('login'),
-                    'author_name': commit_author.get('name'),
-                    'author_email': commit_author.get('email'),
-                    'authored_date': commit_author.get('date'),
-                    'message': commit['commit']['message'],
-                    'committed_date': commit['commit']['committer']['date'],
-                    'parents': "\n".join(p['sha'] for p in commit['parents']),
-                    'verified': commit.get('verification', {}).get('verified')
-                }
-            page += 1
-
-    def repo_commits_v4(self, repo_name, cursor=None):
+    def repo_commits(self, repo_name, cursor=None):
         # type: (str, str) -> Iterable[dict]
         """As of June 2017 GraphQL API does not allow to get commit parents
         Until this issue is fixed this method is only left for a reference
@@ -306,25 +325,3 @@ class GitHubAPI(object):
             cursor = data["ref"]["target"]["history"]["pageInfo"]["endCursor"]
             if not data["ref"]["target"]["history"]["pageInfo"]["hasNextPage"]:
                 break
-
-    @staticmethod
-    def activity(repo_name):
-        # type: (str) -> dict
-        url = "https://github.com/%s/graphs/contributors" % repo_name
-        headers = {
-            'X-Requested-With': 'XMLHttpRequest',
-            'Accept-Encoding': "gzip,deflate,br",
-            'Accept': "application/json",
-            'Origin': 'https://github.com',
-            'Referer': url,
-            "User-Agent": "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:53.0) "
-                          "Gecko/20100101 Firefox/53.0",
-            "Host": 'github.com',
-            "Accept-Language": 'en-US,en;q=0.5',
-            "Connection": "keep-alive",
-            "Cache-Control": 'max-age=0',
-        }
-        cookies = requests.get(url).cookies
-        r = requests.get(url + "-data", cookies=cookies, headers=headers)
-        r.raise_for_status()
-        return r.json()
