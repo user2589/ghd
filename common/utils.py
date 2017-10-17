@@ -162,6 +162,27 @@ def connectivity(ecosystem, months=1000):
     return pd.DataFrame(gen(), columns=cs.index).T
 
 
+@fs_cache
+def account_data(ecosystem):
+    urls = package_urls(ecosystem)
+    users = set(repo_url.split("/", 1)[0] for repo_url in urls)
+    api = scraper.GitHubAPI()
+
+    def gen():
+        for user in users:
+            try:
+                yield api.user_info(user)
+            except scraper.RepoDoesNotExist:
+                continue
+
+    df = pd.DataFrame(
+        gen(), columns=['id', 'login', 'org', 'type', 'public_repos',
+                        'followers', 'following', 'created_at', 'updated_at'])
+    df['org'] = df['type'].map({"Organization": True, "User": False})
+
+    return df.drop('type', 1).set_index('login')
+
+
 def upstreams(ecosystem):
     # type: (str) -> pd.DataFrame
     # ~12s without caching
