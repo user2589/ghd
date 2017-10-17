@@ -19,7 +19,7 @@ SUPPORTED_ECOSYSTEMS = ('npm', 'pypi')
 
 SUPPORTED_METRICS = {
     'commits': scraper.commit_stats,
-    'contributors': scraper.commit_users,
+    # 'contributors': scraper.commit_users,
     'gini': scraper.commit_gini,
     'q50': lambda repo: scraper.contributions_quantile(repo, 0.5),
     'q70': lambda repo: scraper.contributions_quantile(repo, 0.7),
@@ -165,7 +165,7 @@ def connectivity(ecosystem, months=1000):
 @fs_cache
 def account_data(ecosystem):
     urls = package_urls(ecosystem)
-    users = set(repo_url.split("/", 1)[0] for repo_url in urls)
+    users = set(repo_url.split("/", 1)[0].lower() for repo_url in urls)
     api = scraper.GitHubAPI()
 
     def gen():
@@ -259,6 +259,8 @@ def _fcd(ecosystem, start_date):
 
 @fs_cache
 def dead_projects(ecosystem):
+    # definition of dead: <= 1 commit per month on average in a year
+    # or, if commits data unavailable, over 1 year since last release
     es = _get_ecosystem(ecosystem)
     deps = es.deps_and_size()
     commits = monthly_data(ecosystem, "commits")
@@ -282,12 +284,24 @@ def monthly_dataset(ecosystem, start_date='2008'):
     mddfs = {metric: monthly_data(ecosystem, metric).loc[:, start_date:]
              for metric in ("commits", "contributors", "gini", "q50", "q70",
                             "issues", "closed_issues", "submitters",
-                            "non_dev_issues")}
+                            "non_dev_submitters", "non_dev_issues", "q90")}
 
-    # definition of active: > 1 commit per month in a given year
     mddfs['dead'] = dead_projects(ecosystem).loc[:, start_date:]
 
-    mddfs['connectivity'] = connectivity(ecosystem)
+    logger.info("Connectivity..")
+    mddfs['connectivity1'] = connectivity(ecosystem, 1)
+    mddfs['connectivity3'] = connectivity(ecosystem, 3)
+    mddfs['connectivity6'] = connectivity(ecosystem, 6)
+    mddfs['connectivity12'] = connectivity(ecosystem, 12)
+    mddfs['connectivity1000'] = connectivity(ecosystem, 1000)
+
+    logger.info("Contributors..")
+    mddfs['contributors1'] = active_contributors(ecosystem, 1)
+    mddfs['contributors3'] = active_contributors(ecosystem, 3)
+    mddfs['contributors6'] = active_contributors(ecosystem, 6)
+    mddfs['contributors12'] = active_contributors(ecosystem, 12)
+
+    logger.info("Dependencies..")
     _upstreams = upstreams(ecosystem).loc[
         mddfs['dead'].index, mddfs['dead'].columns]
     active_upstreams = _upstreams.where(~mddfs['dead'])
@@ -308,6 +322,8 @@ def monthly_dataset(ecosystem, start_date='2008'):
     mddfs['ac_downstreams'] = count_dependencies(
         cumulative_dependencies(active_downstreams))
 
+    logger.info("Constructing dataframe..")
+
     def gen():
         for package, start in fcd.iteritems():
             logger.info("Processing %s", package)
@@ -322,9 +338,10 @@ def monthly_dataset(ecosystem, start_date='2008'):
                     df[metric] = mddf.loc[package, idx].fillna(0).values
                 else:  # upstream/downstream for packages without releases
                     df[metric] = 0
-            yield df
+            for _, row in df.iterrows():
+                yield row
 
-    return pd.concat(gen()).reset_index(drop=True)
+    return pd.DataFrame(gen()).reset_index(drop=True)
 
 
 @fs_cache
@@ -338,11 +355,11 @@ def survival_data(ecosystem, start_date="2008"):
         for project, _ in fcd.iteritems():
             logger.info("Processing %s", project)
             df = md.loc[md['project'] == project]
-            if len(df) > window:
-                df['dead'] = df['dead'].shift(-1).fillna(method='ffill').astype(int)
-                df = df.iloc[:-window]
-            else:
+            if len(df) <= window:
                 continue
+            df['dead'] = df['dead'].shift(-1).fillna(method='ffill').astype(int)
+            df = df.iloc[:-window]
+
             dead = df.loc[df['dead'] > 0, ['dead']]
             if not dead.empty:
                 df = df.loc[:dead.index[0]]
