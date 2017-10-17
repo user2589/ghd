@@ -123,5 +123,6 @@ class TestScraper(unittest.TestCase):
         self.assertLess(len(issues), 180)
         self.assertTrue(all(i >= 0 for i in issues))
 
+
 if __name__ == "__main__":
     unittest.main()

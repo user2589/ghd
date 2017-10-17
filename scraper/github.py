@@ -230,6 +230,19 @@ class GitHubAPI(object):
                 'verified': commit.get('verification', {}).get('verified')
             }
 
+    def user_info(self, user):
+        # TODO: support pagination
+        # might throw RepoDoesNotExist:
+        return self.request("users/" + user)
+
+    def org_members(self, org):
+        # TODO: support pagination
+        return self.request("orgs/%s/members" % org)
+
+    def user_orgs(self, user):
+        # TODO: support pagination
+        return self.request("users/%s/orgs" % user)
+
     @staticmethod
     def activity(repo_name):
         # type: (str) -> dict
