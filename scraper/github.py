@@ -129,10 +129,14 @@ class GitHubAPI(object):
                 "No GitHub API tokens found in settings.py. Please add some.")
         self.tokens = [GitHubAPIToken(t, timeout=timeout) for t in tokens]
 
-    def request(self, url, method='get', data=None, **params):
-        # type: (str, str, str) -> dict
+    def request(self, url, method='get', paginate=False, data=None, **params):
+        # type: (str, str, bool, str) -> dict
         """ Generic, API version agnostic request method """
         timeout_counter = 0
+        if paginate:
+            paginated_res = []
+            params['page'] = 1
+            params['per_page'] = 100
 
         while True:
             for token in sorted(self.tokens, key=lambda t: t.when(url)):
@@ -155,7 +159,17 @@ class GitHubAPI(object):
                     # repository is empty https://developer.github.com/v3/git/
                     return {}
                 r.raise_for_status()
-                return r.json()
+                res = r.json()
+                if paginate:
+                    paginated_res.extend(res)
+                    has_next = 'rel="next"' in r.headers.get("Link")
+                    if not res or not has_next:
+                        return paginated_res
+                    else:
+                        params["page"] += 1
+                        continue
+                else:
+                    return res
 
             next_res = min(token.when(url) for token in self.tokens)
             sleep = int(next_res - time.time()) + 1
@@ -166,60 +180,55 @@ class GitHubAPI(object):
                 time.sleep(sleep)
                 logger.info(".. resumed")
 
-    def repo_issues(self, repo_name, page=1):
+    def repo_issues(self, repo_name, page=None):
         # type: (str, int) -> Iterable[dict]
         url = "repos/%s/issues" % repo_name
-        while True:
-            # might throw RepoDoesNotExist
-            data = self.request(url, per_page=100, page=page, state='all')
 
-            if not data:
-                break
+        # might throw RepoDoesNotExist
+        if page is None:
+            data = self.request(url, paginate=True, state='all')
+        else:
+            data = self.request(url, page=page, per_page=100, state='all')
 
-            for issue in data:
-                if 'pull_request' not in issue:
-                    yield {
-                        'author': issue['user']['login'],
-                        'closed': issue['state'] != "open",
-                        'created_at': issue['created_at'],
-                        'updated_at': issue['updated_at'],
-                        'closed_at': issue['closed_at'],
-                        'number': issue['number'],
-                        'title': issue['title']
-                    }
-            page += 1
+        for issue in data:
+            if 'pull_request' not in issue:
+                yield {
+                    'author': issue['user']['login'],
+                    'closed': issue['state'] != "open",
+                    'created_at': issue['created_at'],
+                    'updated_at': issue['updated_at'],
+                    'closed_at': issue['closed_at'],
+                    'number': issue['number'],
+                    'title': issue['title']
+                }
 
-    def repo_commits(self, repo_name, page=1):
+    def repo_commits(self, repo_name, page=None):
         # type: (str, int) -> Iterable[dict]
         # check repo_name follows pattern %owner/%repo
         _, _ = repo_name.split("/")
         url = "repos/%s/commits" % repo_name
-        while True:
-            # might throw RepoDoesNotExist
-            data = self.request(url, per_page=100, page=page)
 
-            if not data:
-                # no commits or page is too high. Last call could be saved  by
-                # checking response.headers['Link'], but it'll violate the
-                # abstraction
-                break
+        # might throw RepoDoesNotExist
+        if page is None:
+            data = self.request(url, paginate=True)
+        else:
+            data = self.request(url, page=page, per_page=100)
 
-            for commit in data:
-                # might be None for commits authored outside of github
-                github_author = commit['author'] or {}
-                commit_author = commit['commit'].get('author') or {}
-                yield {
-                    'sha': commit['sha'],
-                    'author': github_author.get('login'),
-                    'author_name': commit_author.get('name'),
-                    'author_email': commit_author.get('email'),
-                    'authored_date': commit_author.get('date'),
-                    'message': commit['commit']['message'],
-                    'committed_date': commit['commit']['committer']['date'],
-                    'parents': "\n".join(p['sha'] for p in commit['parents']),
-                    'verified': commit.get('verification', {}).get('verified')
-                }
-            page += 1
+        for commit in data:
+            # might be None for commits authored outside of github
+            github_author = commit['author'] or {}
+            commit_author = commit['commit'].get('author') or {}
+            yield {
+                'sha': commit['sha'],
+                'author': github_author.get('login'),
+                'author_name': commit_author.get('name'),
+                'author_email': commit_author.get('email'),
+                'authored_date': commit_author.get('date'),
+                'message': commit['commit']['message'],
+                'committed_date': commit['commit']['committer']['date'],
+                'parents': "\n".join(p['sha'] for p in commit['parents']),
+                'verified': commit.get('verification', {}).get('verified')
+            }
 
     @staticmethod
     def activity(repo_name):
@@ -250,7 +259,7 @@ class GitHubAPIv4(GitHubAPI):
     def v4(self, query, **params):
         # type: (str) -> dict
         payload = json.dumps({"query": query, "variables": params})
-        return self.request("graphql", 'post', payload)
+        return self.request("graphql", 'post', data=payload)
 
     def repo_issues(self, repo_name, cursor=None):
         # type: (str, str) -> Iterable[dict]
