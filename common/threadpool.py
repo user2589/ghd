@@ -44,8 +44,8 @@ class ThreadPool(object):
             except Exception as e:
                 logging.exception(e)
             return None
-        self.exec_semaphore.acquire()
 
+        self.exec_semaphore.acquire()
         t = threading.Thread(target=worker)
         t.start()
         if len(self._threads) > self.n:

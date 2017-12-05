@@ -44,8 +44,9 @@ class Command(BaseCommand):
         logger.setLevel(loglevel)
 
         import sys
-        sys.setrecursionlimit(20000)
+        sys.setrecursionlimit(20000)  # required by scraper.commits
 
+        # options['workers'] threads, but at least 1 and at most 2 x CPU_COUNT
         workers = min(max(options['workers'], 1), threadpool.CPU_COUNT * 2)
         tp = threadpool.ThreadPool(workers)
 

@@ -8,7 +8,10 @@ import re
 
 import ijson.backends.yajl2 as ijson
 
+from common import decorators as d
+
 logger = logging.getLogger('ghd')
+fs_cache = d.fs_cache('npm')
 
 
 def _get_url(item):
@@ -21,6 +24,7 @@ def _get_url(item):
     return item.get('url', '')
 
 
+@fs_cache
 def packages_info():
     url = 'https://skimdb.npmjs.com/registry/_all_docs?include_docs=true'
     fh = urllib.urlopen(url)
