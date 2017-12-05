@@ -13,10 +13,12 @@ import re
 import json
 import shutil
 import logging
+from collections import defaultdict
 
 import pandas as pd
 
 from common import decorators as d
+from common import email
 
 # TODO: bugtrack_url support
 
@@ -345,7 +347,7 @@ class Package(object):
     def github_url(self):
         # check home page first
         m = re.search("github\.com/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+",
-                      self.info.get('info', {}).get('home_page', ''))
+                      self.info.get('info', {}).get('home_page') or "")
         if m:
             url = m.group(0)
         else:
@@ -422,15 +424,70 @@ def list_packages():
     return s
 
 
-def packages_info():
+# TODO: merge package_urls, package_owners and deps_and_size
+@pypi_cache
+def package_urls():
+    urls = {}  # urls[pkgname] = github_url
+    author_projects = defaultdict(list)
+    author_orgs = defaultdict(
+        lambda: defaultdict(int))  # orgs[author] = {org: num_packages}
+
     for pkgname in list_packages():
         try:
             p = Package(pkgname)
         except PackageDoesNotExist:
             # some deleted packages aren't removed from the list
             continue
+        if p.github_url:
+            urls[pkgname] = p.github_url
 
-        yield {'name': pkgname, 'github_url': p.github_url}
+        try:
+            author_email = email.clean(p.info["info"].get('author_email'))
+        except email.InvalidEmail:
+            continue
+
+        author_projects[author_email].append(pkgname)
+        if p.github_url:
+            github_org = p.github_url.split("/", 1)[0]
+            author_orgs[author_email][github_org] += 1
+
+    # at this point, we have ~54K repos
+    # by guessing github account from author affiliations we can get 8K more
+    for author, packages in author_projects.items():
+        orgs = [org for org, _ in
+                sorted(author_orgs[author].items(), key=lambda x: -x[1])]
+        if not orgs:
+            continue
+        for package in packages:
+            if package in urls:
+                continue
+            for org in orgs:
+                url = "%s/%s" % (org, package)
+                r = requests.get("https://github.com/" + url)
+                if r.status_code == 200:
+                    urls[package] = url
+                    break
+
+    return pd.Series(urls)
+
+
+@pypi_cache
+def package_owners():
+    authors = {}
+    for pkgname in list_packages():
+        try:
+            p = Package(pkgname)
+        except PackageDoesNotExist:
+            continue
+        try:
+            author_email = email.clean(p.info["info"].get('author_email'))
+        except email.InvalidEmail:
+            continue
+
+        if email:  # sometimes it's empty
+            authors[pkgname] = email
+
+    return pd.Series(authors)
 
 
 # Note that this method already uses internal cache. However, we probably don't
