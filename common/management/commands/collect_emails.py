@@ -11,6 +11,7 @@ import pandas as pd
 from django.core.management.base import BaseCommand
 
 from common import decorators
+from common import email
 from scraper import utils as scraper
 
 logging.basicConfig()
@@ -60,16 +61,16 @@ class Command(BaseCommand):
                 if not commit['author'] or not commit['author_email']:
                     continue
                 try:
-                    email = scraper.clean_email(commit['author_email'])
+                    email_addr = email.clean(commit['author_email'])
                 except ValueError:  # invalid email
                     continue
 
-                if email in users.index:
+                if email_addr in users.index:
                     continue
 
                 md5 = hashlib.md5()
-                md5.update(email)
-                users.loc[email] = {
+                md5.update(email_addr)
+                users.loc[email_addr] = {
                     'uname': commit['author'],
                     'email_md5': md5.hexdigest()
                 }

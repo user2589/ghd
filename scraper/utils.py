@@ -10,6 +10,7 @@ import numpy as np
 
 from scraper import github
 from common import decorators
+from common import email
 
 """ First contrib date without MIN_DATE restriction:
 > fcd = utils.first_contrib_dates("pypi").dropna()
@@ -87,20 +88,6 @@ def zeropad(fill_value):
             return _zeropad(func(*args, **kwargs), fill_value=fill_value)
         return wrapper
     return decorator
-
-
-def clean_email(raw_email):
-    """Extract email from a full address. Example:
-      'John Doe <jdoe+github@foo.com>' -> jdoe@foo.com"""
-    email = raw_email.split("<", 1)[-1].split(">", 1)[0]
-    try:
-        uname, domain = email.split("@")
-    except ValueError:
-        raise ValueError("Invalid email")
-    uname = uname.rsplit(" ", 1)[-1]
-    domain = domain.split(" ", 1)[0]
-
-    return "%s@%s" % (uname.split("+", 1)[0], domain)
 
 
 @scraper_cache('raw')

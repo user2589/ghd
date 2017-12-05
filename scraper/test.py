@@ -8,17 +8,6 @@ import scraper
 
 class TestScraper(unittest.TestCase):
     # TODO: invalidate cache
-    def test_clean_email(self):
-        test = [
-            "me@someorg.com",
-            "<me@someorg.com",
-            "me@someorg.com>",
-            "John Doe <me@someorg.com>",
-            "John Doe <me+github.com@someorg.com>",
-            "John Doe me@someorg.com",
-        ]
-        for email in test:
-            self.assertEqual(scraper.clean_email(email), "me@someorg.com")
 
     def test_commits(self):
         # as of Aug 2017 six has 438 commits
