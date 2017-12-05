@@ -302,3 +302,11 @@ def open_issues(repo_name):
     closed = closed_issues(repo_name).cumsum()
     res = submitted - closed
     return res.rename("open_issues")
+
+
+@scraper_cache('aggregate')
+def domain_stats(repo_name):
+    cs = _commits(repo_name).reset_index()[['sha', 'author_email']]
+    cs['domain'] = cs['author_email'].map(email.domain)
+    return cs[['domain', 'sha']].groupby('domain').count()['sha'].rename(
+        'commits').sort_values(ascending=False)
