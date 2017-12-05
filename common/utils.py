@@ -8,9 +8,11 @@ from collections import defaultdict
 
 import pandas as pd
 import numpy as np
+import networkx as nx
 
 from common import decorators as d
 import scraper
+import pypi
 
 logger = logging.getLogger("ghd")
 fs_cache = d.fs_cache('common')
@@ -42,12 +44,18 @@ def _get_ecosystem(ecosystem):
     return importlib.import_module(ecosystem)
 
 
-@d.fs_cache('')
+@fs_cache
 def package_urls(ecosystem):
     # type: (str) -> pd.DataFrame
     """Get list of packages and their respective GitHub repositories"""
     es = _get_ecosystem(ecosystem)
-    return pd.Series(es.packages_info()).dropna().rename("github_url")
+    return es.package_urls().dropna().rename("github_url")
+
+
+@fs_cache
+def package_owners(ecosystem):
+    es = _get_ecosystem(ecosystem)
+    return es.package_owners().dropna().rename('owner')
 
 
 @fs_cache
@@ -141,23 +149,26 @@ def connectivity(ecosystem, months=1000):
     :return: pd.DataFrame, index is projects, columns are months
     :rtype months: pd.DataFrame
     """
-    cs = contributors(ecosystem, months)
+    # "-" stands for anonymous user
+    cs = contributors(ecosystem, months).applymap(
+        lambda x: x.difference(["-"]) if pd.notnull(x) else x)
+    owners = package_urls(ecosystem).map(lambda x: x.split("/", 1)[0])
 
     def gen():
         for month, row in cs.T.iterrows():
             logger.info("Processing %s", month)
+            conn = []
 
-            # users - users of the project we calculate connectivity for
-            # users2 - users of other project we check for connection
-            # "-" standa for anonymous user
-            # we need to subtract 1 because it overlaps with itself
-            yield pd.Series(
-                (sum(bool(not users.difference(["-"]).isdisjoint(users2))
-                     for users2 in row if users2 and pd.notnull(users2)) - 1
-                 if users and pd.notnull(users) else 0
-                    for project, users in row.iteritems()),
-                index=row.index, name=month
-            )
+            projects = defaultdict(set)
+            for project, users in row.iteritems():
+                for user in users:
+                    projects[user].add(project)
+
+            for project, users in row.iteritems():
+                ps = set().union(*[projects[user] for user in users])
+                conn.append(sum(owners[p] != owners[project] for p in ps))
+
+            yield pd.Series(conn, index=row.index, name=month)
 
     return pd.DataFrame(gen(), columns=cs.index).T
 
@@ -204,39 +215,41 @@ def downstreams(uss):
     :return: pd.DataFrame, df.loc[project, month] = set([*projects])
     """
     # ~35s without caching
-    uss = upstreams(uss)
+    if isinstance(uss, str):
+        uss = upstreams(uss)
 
-    def gen():
-        for month in uss.columns:
-            s = defaultdict(set)
-            for pkg, dss in uss[month].iteritems():
-                if dss and pd.notnull(dss):
-                    # add package as downstream to each of upstreams
-                    for ds in dss:
-                        s[ds].add(pkg)
-            yield pd.Series(s, name=month, index=uss.index)
+    def gen(row):
+        s = defaultdict(set)
+        for pkg, dss in row.iteritems():
+            if dss and pd.notnull(dss):
+                # add package as downstream to each of upstreams
+                for ds in dss:
+                    s[ds].add(pkg)
+        return pd.Series(s, name=row.name, index=row.index)
 
-    return pd.DataFrame(gen()).T
+    return uss.apply(gen, axis=0)
 
 
 def cumulative_dependencies(deps):
-    def gen():
-        for month, dependencies in deps.T.iterrows():
-            cumulative_upstreams = {}
+    # apply - 150s
+    # owners = package_owners("pypi")
 
-            def traverse(pkg):
-                if pkg not in cumulative_upstreams:
-                    cumulative_upstreams[pkg] = set()  # prevent infinite loop
-                    ds = dependencies[pkg]
-                    if ds and pd.notnull(ds):
-                        cumulative_upstreams[pkg] = set.union(
-                            ds, *(traverse(d) for d in ds if d in dependencies))
-                return cumulative_upstreams[pkg]
+    def gen(dependencies):
+        cumulative_upstreams = {}
 
-            yield pd.Series(dependencies.index, index=dependencies.index).map(
-                traverse).rename(month)
+        def traverse(pkg):
+            if pkg not in cumulative_upstreams:
+                cumulative_upstreams[pkg] = set()  # prevent infinite loop
+                ds = dependencies[pkg]
+                if ds and pd.notnull(ds):
+                    cumulative_upstreams[pkg] = set.union(
+                        ds, *(traverse(d) for d in ds if d in dependencies))
+            return cumulative_upstreams[pkg]
 
-    return pd.concat(gen(), axis=1)
+        return pd.Series(dependencies.index, index=dependencies.index).map(
+            traverse).rename(dependencies.name)
+
+    return deps.apply(gen, axis=0)
 
 
 def count_dependencies(df):
@@ -277,6 +290,132 @@ def dead_projects(ecosystem):
     return dead
 
 
+# TODO:
+# network centrality dependencies
+# network centrality contributors
+
+def _count_deps(deps, ecosystem, start_date, active_only, transitive):
+    dead = dead_projects(ecosystem).loc[:, start_date:]
+    deps = deps.loc[dead.index, dead.columns]
+    if active_only:
+        deps = deps.where(~dead)
+    if transitive:
+        deps = cumulative_dependencies(deps)
+    return count_dependencies(deps)
+
+
+@fs_cache
+def count_downstreams(ecosystem, start_date, active_only=False, transitive=False):
+    return _count_deps(
+        downstreams(ecosystem), ecosystem, start_date, active_only, transitive)
+
+
+@fs_cache
+def count_upstreams(ecosystem, start_date, active_only, transitive):
+    return _count_deps(
+        upstreams(ecosystem), ecosystem, start_date, active_only, transitive)
+
+
+@fs_cache
+def new_downstreams(ecosystem, start_date, active_only, transitive):
+    dead = dead_projects(ecosystem).loc[:, start_date:]
+    deps = downstreams(ecosystem).loc[dead.index, dead.columns]
+    if active_only:
+        deps = deps.where(~dead)
+    if transitive:
+        deps = cumulative_dependencies(deps)
+    owners = package_owners(ecosystem).to_dict()
+    orgs = package_urls(ecosystem).map(lambda x: x.split("/", 1)[0]).to_dict()
+    deps = deps.applymap(
+        lambda x: set((orgs.get(p, ""), owners.get(p, "")) for p in x) if x and pd.notnull(x) else None)
+    return count_dependencies(deps)
+
+
+def nx_graph(connections):
+    """
+    :param connections: pd.Dataframe, where columns are months and rows are
+            packages. Cells contain
+
+    :return:
+    """
+    pass
+
+
+def centrality(how, graph, *args, **kwargs):
+    # type: (str, nx.Graph) -> dict
+    if not how.endswith("_centrality") and how not in \
+            ('communicability', 'communicability_exp', 'estrada_index',
+             'communicability_centrality_exp', "subgraph_centrality_exp",
+             'dispersion', 'betweenness_centrality_subset', 'edge_load'):
+        how += "_centrality"
+    assert hasattr(nx, how), "Unknown centrality measure: " + how
+    return getattr(nx, how)(graph, *args, **kwargs)
+
+
+@fs_cache
+def dependencies_centrality(ecosystem, start_date, centrality_type):
+    """
+    [edge_]current_flow_closeness is not defined for digraphs
+    current_flow_betweenness - didn't try
+    communicability*
+    estrada_index
+    """
+    uss = upstreams(ecosystem).loc[:, start_date:]
+
+    def gen(stub):
+        # stub = uss column
+        logger.info("Processing %s", stub.name)
+        g = nx.DiGraph()
+        for pkg, us in stub.iteritems():
+            if not us or pd.isnull(us):
+                continue
+            for u in us:  # u is upstream name
+                g.add_edge(pkg, u)
+
+        return pd.Series(centrality(centrality_type, g), index=stub.index)
+
+    return uss.apply(gen, axis=0).fillna(0)
+
+
+@fs_cache
+def contributors_centrality(ecosystem, start_date, centrality_type, months, *args):
+    """
+    {in|out}_degree are not supported
+    eigenvector|katz - didn't converge (increase number of iterations?)
+    current_flow_* - requires connected graph
+    betweenness_subset* - requires sources
+    communicability - doesn't work, internal error
+    subgraph - unknown (update nx?)
+    local_reaching - requires v
+
+    """
+    contras = contributors(ecosystem, months).loc[:, start_date:]
+    # {in|out}_degree is not defined for undirected graphs
+
+    def gen(stub):
+        logger.info("Processing %s", stub.name)
+        projects = defaultdict(set)  # projects[contributor] = set(projects)
+
+        for pkg, cs in stub.iteritems():
+            if not cs or pd.isnull(cs):
+                continue
+            for c in cs:
+                projects[c].add(pkg)
+
+        projects["-"] = set()
+        g = nx.Graph()
+
+        for pkg, cs in stub.iteritems():
+            for c in cs:
+                for p in projects[c]:
+                    if p != pkg:
+                        g.add_edge(pkg, p)
+        return pd.Series(centrality(centrality_type, g, *args),
+                         index=stub.index)
+
+    return contras.apply(gen, axis=0).fillna(0)
+
+
 @fs_cache
 def monthly_dataset(ecosystem, start_date='2008'):
     # TODO: more descriptive name to distinguish from monthly_data
@@ -288,6 +427,7 @@ def monthly_dataset(ecosystem, start_date='2008'):
 
     mddfs['dead'] = dead_projects(ecosystem).loc[:, start_date:]
 
+    # TODO: to be replaced by centrality
     logger.info("Connectivity..")
     mddfs['connectivity1'] = connectivity(ecosystem, 1)
     mddfs['connectivity3'] = connectivity(ecosystem, 3)
@@ -301,26 +441,38 @@ def monthly_dataset(ecosystem, start_date='2008'):
     mddfs['contributors6'] = active_contributors(ecosystem, 6)
     mddfs['contributors12'] = active_contributors(ecosystem, 12)
 
+    # TODO: to be replaced by count_X
     logger.info("Dependencies..")
-    _upstreams = upstreams(ecosystem).loc[
-        mddfs['dead'].index, mddfs['dead'].columns]
-    active_upstreams = _upstreams.where(~mddfs['dead'])
-    mddfs['upstreams'] = count_dependencies(_upstreams)
-    mddfs['c_upstreams'] = count_dependencies(
-        cumulative_dependencies(_upstreams))
-    mddfs['a_upstreams'] = count_dependencies(active_upstreams)
-    mddfs['ac_upstreams'] = count_dependencies(
-        cumulative_dependencies(active_upstreams))
+    mddfs['upstreams'] = count_upstreams(ecosystem, start_date, False, False)
+    mddfs['c_upstreams'] = count_upstreams(ecosystem, start_date, False, True)
+    mddfs['a_upstreams'] = count_upstreams(ecosystem, start_date, True, False)
+    mddfs['ac_upstreams'] = count_upstreams(ecosystem, start_date, True, True)
 
-    _downstreams = downstreams(ecosystem).loc[
-        mddfs['dead'].index, mddfs['dead'].columns]
-    active_downstreams = _downstreams.where(~mddfs['dead'])
-    mddfs['downstreams'] = count_dependencies(_downstreams)
-    mddfs['c_downstreams'] = count_dependencies(
-        cumulative_dependencies(_downstreams))
-    mddfs['a_downstreams'] = count_dependencies(active_downstreams)
-    mddfs['ac_downstreams'] = count_dependencies(
-        cumulative_dependencies(active_downstreams))
+    mddfs['downstreams'] = count_downstreams(ecosystem, start_date, False, False)
+    mddfs['c_downstreams'] = count_downstreams(ecosystem, start_date, False, True)
+    mddfs['a_downstreams'] = count_downstreams(ecosystem, start_date, True, False)
+    mddfs['ac_downstreams'] = count_downstreams(ecosystem, start_date, True, True)
+
+    mddfs['ndownstreams'] = new_downstreams(ecosystem, start_date, False, False)
+    mddfs['nc_downstreams'] = new_downstreams(ecosystem, start_date, False, True)
+    mddfs['na_downstreams'] = new_downstreams(ecosystem, start_date, True, False)
+    mddfs['nac_downstreams'] = new_downstreams(ecosystem, start_date, True, True)
+
+    logger.info("Dependencies centrality...")
+    for ctype in('degree', 'in_degree', 'out_degree', 'katz', 'load', 'closeness', 'dispersion'):
+        mddfs['dc_'+ctype] = dependencies_centrality("pypi", "2008", ctype)
+
+    logger.info("Contributors centrality...")
+    m = 1
+    for ctype in('betweenness', "closeness", "degree", "edge_betweenness",
+                 "edge_load", "estrada_index", "global_reaching", "harmonic",
+                 "load", "subgraph", "subgraph_centrality_exp"):
+        mddfs['cc_%s_%s'%(ctype, m)] = contributors_centrality(
+            "pypi", "2008", ctype, m)
+    m = 3
+    for ctype in("closeness", "degree"):
+        mddfs['cc_%s_%s'%(ctype, m)] = contributors_centrality(
+            "pypi", "2008", ctype, m)
 
     logger.info("Constructing dataframe..")
 
@@ -348,6 +500,7 @@ def monthly_dataset(ecosystem, start_date='2008'):
 def survival_data(ecosystem, start_date="2008"):
     fcd = _fcd(ecosystem, start_date)
     md = monthly_dataset("pypi", start_date)
+    md['dead'] = (md['dead'] == "True")
 
     window = 12  # right-censoring
 
@@ -367,3 +520,13 @@ def survival_data(ecosystem, start_date="2008"):
                 yield row
 
     return pd.DataFrame(gen(), columns=md.columns)
+
+
+@fs_cache
+def email_domain_stats(ecosystem):
+    # couple hours to run
+    stats = pd.Series()
+    urls = package_urls(ecosystem)
+    for url in urls:
+        stats = stats.add(scraper.domain_stats(url), fill_value=0)
+    return stats.sort_values(ascending=False)
