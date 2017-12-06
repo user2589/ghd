@@ -4,11 +4,14 @@
 fabric
 typing
 requests
-matplotlib
 pandas
 numpy
+networkx
 scikit-learn
-seaborn
+matplotlib
+# seaborn
+# dask
+# distributed
 
 # ===========================
 # STACKOVERFLOW

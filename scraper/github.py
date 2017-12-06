@@ -154,7 +154,8 @@ class GitHubAPI(object):
                     continue  # i.e. try again
 
                 if r.status_code in (404, 451):  # API v3 only
-                    raise RepoDoesNotExist
+                    raise RepoDoesNotExist(
+                        "GH API returned status %s" % r.status_code)
                 elif r.status_code == 409:
                     # repository is empty https://developer.github.com/v3/git/
                     return {}
@@ -162,7 +163,7 @@ class GitHubAPI(object):
                 res = r.json()
                 if paginate:
                     paginated_res.extend(res)
-                    has_next = 'rel="next"' in r.headers.get("Link")
+                    has_next = 'rel="next"' in r.headers.get("Link", "")
                     if not res or not has_next:
                         return paginated_res
                     else:
