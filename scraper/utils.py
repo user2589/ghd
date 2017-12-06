@@ -158,6 +158,10 @@ def commits(repo_name, max_depth=30):
 
     for sha, pts in parents.items():
         for p in pts:
+            # sometimes it raises KeyError. It happens when a new commit was
+            # posted while commits were collected; delete cache for this repo
+            # and retry
+            # rm dataset/scraper.cache/raw/_commits.user.repo.csv
             if dates[p] > dates[sha]:
                 bi = len(backward_impact(sha, dates[sha]))
                 fi = len(forward_impact(p, dates[p]))
@@ -305,8 +309,30 @@ def open_issues(repo_name):
 
 
 @scraper_cache('aggregate')
-def domain_stats(repo_name):
+def domain_commit_stats(repo_name):
     cs = _commits(repo_name).reset_index()[['sha', 'author_email']]
     cs['domain'] = cs['author_email'].map(email.domain)
     return cs[['domain', 'sha']].groupby('domain').count()['sha'].rename(
         'commits').sort_values(ascending=False)
+
+
+@scraper_cache('aggregate')
+@zeropad(0)
+def commercial_involvement(repo_name):
+    cs = commits(repo_name)[['authored_date', 'author_email']]
+    cs["commercial"] = email.is_commercial_bulk(cs["author_email"])
+    stats = cs.groupby(cs['authored_date'].str[:7]).agg(
+        {'authored_date': 'count', 'commercial': 'sum'}
+    ).rename(columns={'authored_date': "commits"})
+    return (stats["commercial"] / stats["commits"]).rename("commercial")
+
+
+@scraper_cache('aggregate')
+@zeropad(0)
+def university_involvement(repo_name):
+    cs = commits(repo_name)[['authored_date', 'author_email']]
+    cs["university"] = email.is_university_bulk(cs["author_email"])
+    stats = cs.groupby(cs['authored_date'].str[:7]).agg(
+        {'authored_date': 'count', 'university': 'sum'}
+    ).rename(columns={'authored_date': "commits"})
+    return (stats["university"] / stats["commits"]).rename("university")

@@ -11,8 +11,8 @@ import numpy as np
 import networkx as nx
 
 from common import decorators as d
+from common import email
 import scraper
-import pypi
 
 logger = logging.getLogger("ghd")
 fs_cache = d.fs_cache('common')
@@ -31,6 +31,8 @@ SUPPORTED_METRICS = {
     'non_dev_issues': scraper.non_dev_issue_stats,
     'submitters': scraper.submitters,
     'non_dev_submitters': scraper.non_dev_submitters,
+    'commercial': scraper.commercial_involvement,
+    'university': scraper.university_involvement,
 }
 
 
@@ -423,7 +425,8 @@ def monthly_dataset(ecosystem, start_date='2008'):
     mddfs = {metric: monthly_data(ecosystem, metric).loc[:, start_date:]
              for metric in ("commits", "contributors", "gini", "q50", "q70",
                             "issues", "closed_issues", "submitters",
-                            "non_dev_submitters", "non_dev_issues", "q90")}
+                            "non_dev_submitters", "non_dev_issues", "q90",
+                            "commercial", "university")}
 
     mddfs['dead'] = dead_projects(ecosystem).loc[:, start_date:]
 
@@ -520,13 +523,3 @@ def survival_data(ecosystem, start_date="2008"):
                 yield row
 
     return pd.DataFrame(gen(), columns=md.columns)
-
-
-@fs_cache
-def email_domain_stats(ecosystem):
-    # couple hours to run
-    stats = pd.Series()
-    urls = package_urls(ecosystem)
-    for url in urls:
-        stats = stats.add(scraper.domain_stats(url), fill_value=0)
-    return stats.sort_values(ascending=False)

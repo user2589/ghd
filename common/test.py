@@ -147,7 +147,8 @@ class TestEmails(unittest.TestCase):
             "john@cmu.edu": True,
             "john@abc.cmu.edu": True,
             "john@abc.edu.uk": True,
-            "john@aedu.au": True,
+            "john@edu.au": True,
+            "john@aedu.au": False,
             "john@vvsu.ru": True,
             "john@abc.vvsu.ru": True,
             "john@england.edu": False,
@@ -166,7 +167,7 @@ class TestEmails(unittest.TestCase):
             "john@australia.edu": True,
         }
         for email_addr, res in test.items():
-            self.assertEqual(email.is_university(email_addr), res)
+            self.assertEqual(email.is_public(email_addr), res)
 
 
 if __name__ == "__main__":

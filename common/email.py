@@ -92,6 +92,75 @@ def public_domains():
     return set(addr_domain.strip() for addr_domain in fh)
 
 
+@d.memoize
+def domain_user_stats():
+    # type: () -> pd.Series
+    """
+    from collections import defaultdict
+    from common import utils as common
+    import scraper
+
+    stats = defaultdict(set)
+    urls = common.package_urls("pypi")
+    for url in reversed(urls):
+        print("Processing:", url)
+        for email_addr in scraper.commits(url)["author_email"]:
+            if not email_addr or pd.isnull(email_addr):
+                continue
+            try:
+                user, domain = clean(email_addr).split("@")
+            except InvalidEmail:
+                continue
+            stats[domain].add(user)
+    s = pd.Series({dm: len(users) for dm, users in stats.items()})
+    s.rename("users").sort_values(ascending=False).to_csv(
+        "common/email_domain_users.csv", encoding="utf8", header=True)
+
+    # sanity check - are non-public, non-university domains belong to companies?
+    # YES, except single user domains
+    es = pd.Series("test@" + s.index, index=s.index)
+    s[~(is_public_bulk(es) | is_university_bulk(es))].sort_values(
+        ascending=False)
+    """
+    return pd.Series.from_csv(
+        os.path.join(os.path.dirname(__file__), "email_domain_users.csv"),
+        header=0)
+
+
+@d.memoize
+def commercial_domains():
+    # type: () -> set
+    """ Return list of personal email domains
+        (i.e. having only one registered person at this domain)
+
+    How to get the original CSV:
+    x = requests.get(
+        "https://gist.githubusercontent.com/tbrianjones/5992856/raw/"
+        "87f527af7bdd21997722fa65143a9af7bee92583/"
+        "free_email_provider_domains.txt").text.split()
+    # manually coded
+    x.extend([
+        'gmail.com', 'users.noreply.github.com', 'hotmail.com',
+        'googlemail.com', 'users.sourceforge.net', 'iki.fi',
+        'yahoo.com', 'me.com', 'gmx.de', 'jaraco.com', 'cihar.com',
+        'yandex.ru', 'outlook.com', 'gmx.net', 'web.de', 'pobox.com',
+        'yahoo.co.uk', 'qq.com', 'free.fr', 'icloud.com', '163.com',
+        '50mail.com', 'live.com', 'lavabit.com', 'mail.ru', '126.com',
+        'yahoo.fr', 'seznam.cz'
+    ])
+    domains = list(set(x))  # make it unique
+    pd.Series(domains, index=domains, name="domain"
+    ).drop(  # mistakenly labeled as public
+        ["unican.es"]
+    ).to_csv("email_public_domains.csv", index=False)
+    """
+
+    dus = domain_user_stats()
+    es = "test@" + pd.Series(dus.index, index=dus.index)
+    return set(
+        dus[~is_public_bulk(es) & ~is_university_bulk(es) & (dus > 1)].index)
+
+
 def is_university(addr, domains=None):
     # type: (str) -> bool
     """ Check if provided email has a university domain
@@ -109,7 +178,11 @@ def is_university(addr, domains=None):
     """
     if domains is None:
         domains = university_domains()
-    chunks = domain(addr).split(".")
+    try:
+        addr_domain = domain(addr)
+    except InvalidEmail:
+        return False
+    chunks = addr_domain.split(".")
     if len(chunks) < 2:
         return False
     return (chunks[-1] == "edu" and chunks[-2] not in ("england", "australia"))\
@@ -119,9 +192,35 @@ def is_university(addr, domains=None):
 
 def is_public(addr, domains=None):
     # type: (str) -> bool
+    """ Check if the passed email registered at a free pubic mail server
+
+    :param addr: email address
+    :param domains: optional set of public mail service domains
+    :return: bool
+    """
     if domains is None:
         domains = public_domains()
-    return domain(addr) in domains
+    try:
+        addr_domain = domain(addr)
+    except InvalidEmail:
+        # anybody can use an invalid email
+        return True
+    chunks = addr_domain.rsplit(".", 1)
+
+    return len(chunks[-1]) > 5 \
+        or len(chunks) < 2 \
+        or addr_domain.endswith("local") \
+        or addr_domain in domains
+
+
+def is_commercial(addr, domains=None):
+    if domains is None:
+        domains = commercial_domains()
+    try:
+        addr_domain = domain(addr)
+    except InvalidEmail:
+        return False
+    return addr_domain in domains
 
 
 def is_university_bulk(addr_series):
@@ -134,3 +233,9 @@ def is_public_bulk(addr_series):
     # type: (pd.Series) -> pd.Series
     domains = public_domains()
     return addr_series.map(lambda addr: is_public(addr, domains))
+
+
+def is_commercial_bulk(addr_series):
+    # type: (pd.Series) -> pd.Series
+    domains = commercial_domains()
+    return addr_series.map(lambda addr: is_commercial(addr, domains))
