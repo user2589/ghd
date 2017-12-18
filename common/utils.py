@@ -320,6 +320,9 @@ def count_upstreams(ecosystem, start_date, active_only, transitive):
 
 @fs_cache
 def new_downstreams(ecosystem, start_date, active_only, transitive):
+    """" an attempt to not count repeating owner/org combinations in downstreams
+        did not work = DELETE
+    """
     dead = dead_projects(ecosystem).loc[:, start_date:]
     deps = downstreams(ecosystem).loc[dead.index, dead.columns]
     if active_only:
@@ -499,27 +502,57 @@ def monthly_dataset(ecosystem, start_date='2008'):
     return pd.DataFrame(gen()).reset_index(drop=True)
 
 
-@fs_cache
 def survival_data(ecosystem, start_date="2008"):
-    fcd = _fcd(ecosystem, start_date)
-    md = monthly_dataset("pypi", start_date)
+    # ~7 seconds for cached md
+    md = monthly_dataset(ecosystem, start_date)
     md['dead'] = (md['dead'] == "True")
 
-    window = 12  # right-censoring
+    window = 12
+    max_age = md[["project", "age"]].groupby('project').max()["age"].rename(
+        "max_age") - window
+    md['max_age'] = md["project"].map(max_age)
+    md["dead"] = md["dead"].shift(-1).fillna(method='ffill').astype(bool)
+    md = md.loc[md["age"] <= md["max_age"]]
 
-    def gen():
-        for project, _ in fcd.iteritems():
-            logger.info("Processing %s", project)
-            df = md.loc[md['project'] == project]
-            if len(df) <= window:
-                continue
-            df['dead'] = df['dead'].shift(-1).fillna(method='ffill').astype(int)
-            df = df.iloc[:-window]
+    death = md[["project", "age"]].loc[md["dead"]].groupby('project').min()[
+        "age"].rename("death")
+    md['death'] = md["project"].map(death)
 
-            dead = df.loc[df['dead'] > 0, ['dead']]
-            if not dead.empty:
-                df = df.loc[:dead.index[0]]
-            for _, row in df.iterrows():
-                yield row
+    sd = md.loc[
+        ((md["age"] == md["max_age"]) & pd.isnull(md["death"])) |
+        (md["age"] == md["death"]) |
+        ((md["age"] == 11) & ((md["death"] > 11) | pd.isnull(md["death"])))
+        ].copy()
+    ad = account_data("pypi")
+    ad.index = ad.index.str.lower()
 
-    return pd.DataFrame(gen(), columns=md.columns)
+    urls = package_urls("pypi")
+    logins = urls.map(lambda s: s.split("/", 1)[0].lower())
+
+    sd['org'] = sd['project'].map(logins).map(ad['org'])
+    sd = sd.loc[pd.notnull(
+        sd['org'])]  # will drop 5500 rows /662 projects (deleted accounts)
+    sd['org'] = sd['org'].astype(
+        int)  # bool - is it an organization or personal account
+
+    sd['d_upstreams0'] = (sd['upstreams'] - sd['a_upstreams'] > 0).astype(int)
+    sd["dead"] = sd["dead"].astype(int)
+
+    sd['zero'] = 0
+    sd['connectivity1'] = sd[['connectivity1', 'zero']].max(axis=1)
+    sd['connectivity3'] = sd[['connectivity3', 'zero']].max(axis=1)
+    sd['connectivity6'] = sd[['connectivity6', 'zero']].max(axis=1)
+
+    return sd.drop(columns=[
+        'ac_downstreams', 'ac_upstreams', 'c_downstreams', 'c_upstreams',
+        'cc_betweenness_1', 'cc_degree_1', 'cc_degree_3',
+        'cc_edge_betweenness_1', 'cc_edge_load_1', 'cc_global_reaching_1',
+        'cc_harmonic_1', 'cc_load_1', 'cc_subgraph_1',
+        'cc_subgraph_centrality_exp_1',
+        'connectivity1', 'connectivity12', 'connectivity3', 'connectivity6',
+        'contributors12', 'contributors3', 'contributors6',
+        'dc_closeness', 'dc_degree', 'dc_dispersion', 'dc_in_degree', 'dc_load',
+        'dc_out_degree',
+        'death', 'max_age', 'zero',
+        'na_downstreams', 'nac_downstreams', 'nc_downstreams', 'ndownstreams'
+    ])
