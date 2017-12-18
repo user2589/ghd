@@ -318,24 +318,6 @@ def count_upstreams(ecosystem, start_date, active_only, transitive):
         upstreams(ecosystem), ecosystem, start_date, active_only, transitive)
 
 
-@fs_cache
-def new_downstreams(ecosystem, start_date, active_only, transitive):
-    """" an attempt to not count repeating owner/org combinations in downstreams
-        did not work = DELETE
-    """
-    dead = dead_projects(ecosystem).loc[:, start_date:]
-    deps = downstreams(ecosystem).loc[dead.index, dead.columns]
-    if active_only:
-        deps = deps.where(~dead)
-    if transitive:
-        deps = cumulative_dependencies(deps)
-    owners = package_owners(ecosystem).to_dict()
-    orgs = package_urls(ecosystem).map(lambda x: x.split("/", 1)[0]).to_dict()
-    deps = deps.applymap(
-        lambda x: set((orgs.get(p, ""), owners.get(p, "")) for p in x) if x and pd.notnull(x) else None)
-    return count_dependencies(deps)
-
-
 def nx_graph(connections):
     """
     :param connections: pd.Dataframe, where columns are months and rows are
@@ -459,11 +441,6 @@ def monthly_dataset(ecosystem, start_date='2008'):
     mddfs['a_downstreams'] = count_downstreams(ecosystem, start_date, True, False)
     mddfs['ac_downstreams'] = count_downstreams(ecosystem, start_date, True, True)
 
-    mddfs['ndownstreams'] = new_downstreams(ecosystem, start_date, False, False)
-    mddfs['nc_downstreams'] = new_downstreams(ecosystem, start_date, False, True)
-    mddfs['na_downstreams'] = new_downstreams(ecosystem, start_date, True, False)
-    mddfs['nac_downstreams'] = new_downstreams(ecosystem, start_date, True, True)
-
     logger.info("Dependencies centrality...")
     for ctype in('degree', 'in_degree', 'out_degree', 'katz', 'load', 'closeness', 'dispersion'):
         mddfs['dc_'+ctype] = dependencies_centrality("pypi", "2008", ctype)
@@ -553,6 +530,5 @@ def survival_data(ecosystem, start_date="2008"):
         'contributors12', 'contributors3', 'contributors6',
         'dc_closeness', 'dc_degree', 'dc_dispersion', 'dc_in_degree', 'dc_load',
         'dc_out_degree',
-        'death', 'max_age', 'zero',
-        'na_downstreams', 'nac_downstreams', 'nc_downstreams', 'ndownstreams'
+        'death', 'max_age', 'zero'
     ])
