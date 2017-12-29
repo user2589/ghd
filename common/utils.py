@@ -480,47 +480,66 @@ def monthly_dataset(ecosystem, start_date='2008'):
 
 
 def survival_data(ecosystem, start_date="2008"):
-    # ~7 seconds for cached md
     md = monthly_dataset(ecosystem, start_date)
     md['dead'] = (md['dead'] == "True")
 
+    # strip right 12 month used to predict death
     window = 12
-    max_age = md[["project", "age"]].groupby('project').max()["age"].rename(
-        "max_age") - window
+    max_age = md[["project", "age"]].groupby(
+        'project').max()["age"].rename("max_age") - window
     md['max_age'] = md["project"].map(max_age)
+    # should be done before cutting to max_age to remove last observation
+    # (it is shifted from the next project)
     md["dead"] = md["dead"].shift(-1).fillna(method='ffill').astype(bool)
+    # remove last <window> month used to find out if the project is dead
     md = md.loc[md["age"] <= md["max_age"]]
 
+    # for dead projects, remove everything after the first death
     death = md[["project", "age"]].loc[md["dead"]].groupby('project').min()[
         "age"].rename("death")
     md['death'] = md["project"].map(death)
+    # there is no afterlife, everything just goes black
+    md = md.loc[(md["death"] >= md["age"]) | pd.isnull(md["death"])]
 
-    sd = md.loc[
-        ((md["age"] == md["max_age"]) & pd.isnull(md["death"])) |
-        (md["age"] == md["death"]) |
-        ((md["age"] == 11) & ((md["death"] > 11) | pd.isnull(md["death"])))
-        ].copy()
+    # avg academic involvement
+    md["uni"] = md["university"] * md["commits"]
+    uni = md[["project", "uni", "commits"]].groupby('project').sum()
+    md["uni"] = md["project"].map(uni["uni"] / uni["commits"])
+
+    # average commercial involvement
+    md["comm"] = md["commercial"] * md["commits"]
+    comm = md[["project", "comm", "commits"]].groupby('project').sum()
+    md["comm"] = md["project"].map(comm["comm"] / comm["commits"])
+
+    # trivial vs. non-trivial
+    max_contrib = md[["project", "contributors"]].groupby('project').max()[
+        "contributors"]
+    md["max_contrib"] = md["project"].map(max_contrib)
+
     ad = account_data("pypi")
     ad.index = ad.index.str.lower()
 
-    urls = package_urls("pypi")
+    urls = package_urls(ecosystem)
     logins = urls.map(lambda s: s.split("/", 1)[0].lower())
 
-    sd['org'] = sd['project'].map(logins).map(ad['org'])
-    sd = sd.loc[pd.notnull(
-        sd['org'])]  # will drop 5500 rows /662 projects (deleted accounts)
-    sd['org'] = sd['org'].astype(
+    md['org'] = md['project'].map(logins).map(ad['org'])
+    # assume deleted accounts to be non-org
+    md['org'] = md['org'].fillna(False)
+    # alternatively, # will drop 5500 rows /662 projects (deleted accounts)
+    # sd = sd.loc[pd.notnull(sd['org'])]
+    md['org'] = md['org'].astype(
         int)  # bool - is it an organization or personal account
 
-    sd['d_upstreams0'] = (sd['upstreams'] - sd['a_upstreams'] > 0).astype(int)
-    sd["dead"] = sd["dead"].astype(int)
+    md['d_upstreams0'] = (md['upstreams'] - md['a_upstreams'] > 0).astype(int)
+    md["dead"] = md["dead"].astype(int)
 
-    sd['zero'] = 0
-    sd['connectivity1'] = sd[['connectivity1', 'zero']].max(axis=1)
-    sd['connectivity3'] = sd[['connectivity3', 'zero']].max(axis=1)
-    sd['connectivity6'] = sd[['connectivity6', 'zero']].max(axis=1)
+    # not used anymore
+    # sd['zero'] = 0
+    # sd['connectivity1'] = sd[['connectivity1', 'zero']].max(axis=1)
+    # sd['connectivity3'] = sd[['connectivity3', 'zero']].max(axis=1)
+    # sd['connectivity6'] = sd[['connectivity6', 'zero']].max(axis=1)
 
-    return sd.drop(columns=[
+    return md.drop(columns=[
         'ac_downstreams', 'ac_upstreams', 'c_downstreams', 'c_upstreams',
         'cc_betweenness_1', 'cc_degree_1', 'cc_degree_3',
         'cc_edge_betweenness_1', 'cc_edge_load_1', 'cc_global_reaching_1',
@@ -530,5 +549,6 @@ def survival_data(ecosystem, start_date="2008"):
         'contributors12', 'contributors3', 'contributors6',
         'dc_closeness', 'dc_degree', 'dc_dispersion', 'dc_in_degree', 'dc_load',
         'dc_out_degree',
-        'death', 'max_age', 'zero'
+        'death', 'max_age',
+        'na_downstreams', 'nac_downstreams', 'nc_downstreams', 'ndownstreams'
     ])
