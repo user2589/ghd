@@ -91,7 +91,7 @@ def zeropad(fill_value):
 
 
 @scraper_cache('raw')
-def _commits(repo_name):
+def commits(repo_name):
     # type: (str) -> pd.DataFrame
     """
     convert old cache files:
@@ -101,81 +101,6 @@ def _commits(repo_name):
         github_api.repo_commits(repo_name),
         columns=['sha', 'author', 'author_name', 'author_email', 'authored_date',
                  'committed_date', 'parents']).set_index('sha', drop=True)
-
-
-@scraper_cache('commits')
-def commits(repo_name, max_depth=30):
-    # type: (str, int) -> pd.DataFrame
-    """ Fix dates in original commits
-    ~200ms overhead for 26k commits
-    :param repo_name: str, "<owner_login>/<login>"
-    :param max_depth: int, max number of steps to look forward/back
-            to fix commit dates
-    :return: pd.DataFrame with commits
-    """
-    cs = _commits(repo_name)
-
-    dates = cs['authored_date'].to_dict()
-    authors = cs['author'].to_dict()
-    parents = defaultdict(set)
-    children = defaultdict(set)
-
-    for child, ps in cs['parents'].iteritems():
-        if pd.notnull(ps) and ps:
-            parents[child] = set(ps.split("\n"))
-            for parent in parents[child]:
-                children[parent].add(child)
-
-    def forward_impact(sha, date, depth=0):
-        # commit authors affected if child commit is assumed
-        # to be submitted after parent
-        res = {authors[sha]}
-        if depth == max_depth:
-            return res
-        return res.union(
-            *(forward_impact(c, date, depth + 1) for c in children[sha] if
-              dates[c] < date))
-
-    def move_forward(sha, date):
-        if dates[sha] < date:
-            dates[sha] = date
-            [move_forward(c, date) for c in children[sha] if dates[c] < date]
-
-    def backward_impact(sha, date, depth=0):
-        # commit authors affected if parent commit is assumed
-        # to be submitted before child
-        res = {authors[sha]}
-        if depth == max_depth:
-            return res
-        return res.union(
-            *(backward_impact(p, date, depth + 1) for p in parents[sha] if
-              dates[p] > date))
-
-    def move_back(sha, date):
-        if dates[sha] > date:
-            dates[sha] = date
-            [move_back(p, date) for p in parents[sha] if dates[p] > date]
-
-    for sha, pts in parents.items():
-        for p in pts:
-            # sometimes it raises KeyError. It happens when a new commit was
-            # posted while commits were collected; delete cache for this repo
-            # and retry
-            # rm dataset/scraper.cache/raw/_commits.user.repo.csv
-            if dates[p] > dates[sha]:
-                bi = len(backward_impact(sha, dates[sha]))
-                fi = len(forward_impact(p, dates[p]))
-                if bi > 5 and fi > 5:
-                    # we only fix rather simple cases here, and this one is not
-                    # usually high bi/fi is a result of a messed up rebase
-                    continue
-                elif bi > fi:
-                    move_forward(sha, max(dates[p] for p in pts))
-                else:
-                    move_back(p, dates[sha])
-
-    cs['authored_date'].update(pd.Series(dates))
-    return cs.loc[cs['authored_date'] > MIN_DATE]
 
 
 @scraper_cache('aggregate', 2)
