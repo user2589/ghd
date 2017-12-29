@@ -22,11 +22,6 @@ def collect_scraper(package, url):
     scraper.commit_stats(url)
 
 
-def collect_common(ecosystem, metric):
-    logger.info("Processing %s", metric)
-    utils.clustering_data(ecosystem, metric)
-
-
 class Command(BaseCommand):
     requires_system_checks = False
     help = "Download and store commit and issues data for all packages in " \
@@ -53,8 +48,5 @@ class Command(BaseCommand):
         urls = utils.package_urls(options['ecosystem'])
         for package, url in urls.iteritems():
             tp.submit(collect_scraper, package, url)
-
-        for metric in utils.SUPPORTED_METRICS:
-            tp.submit(collect_common, options['ecosystem'], metric)
 
         tp.shutdown()
