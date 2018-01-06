@@ -1,16 +1,16 @@
 
 from __future__ import print_function
 
-import logging
-from functools import wraps
-from collections import defaultdict
-
-import pandas as pd
 import numpy as np
+import pandas as pd
 
-from scraper import github
+from functools import wraps
+import logging
+import re
+
 from common import decorators
 from common import email
+from scraper import github
 
 """ First contrib date without MIN_DATE restriction:
 > fcd = utils.first_contrib_dates("pypi").dropna()
@@ -37,10 +37,51 @@ Only 7 projects (1 commit each) have such commits, so they are safe to ignore
 
 MIN_DATE = "1997"
 DEFAULT_USERNAME = "-"
+
 github_api = github.GitHubAPI()
 scraper_cache = decorators.typed_fs_cache('scraper')
 
 logger = logging.getLogger("ghd.scraper")
+
+# mapping of providers to API objects
+# so far it looks like GitHub covers over 99% of projects
+PROVIDERS = {
+    "github.com": github.GitHubAPI,
+    "bitbucket.org": None,
+    "gitlab.org": None,
+    "sourceforge.net": None,
+}
+# maybe provider-specific patterns?
+URL_PATTERN = re.compile(
+    "(github\.com|bitbucket\.org|gitlab\.com)/([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)")
+
+
+def named_url_pattern(name):
+    """ Return project-specific pattern
+    This pattern must be consistent with URL_PATTERN
+    """
+    return "(github\.com|bitbucket\.org|gitlab\.com)/[a-zA-Z0-9_-]+/" + name
+
+
+def parse_url(url):
+    # type: (str) -> (str, str)
+    """Return provider and project id
+    >>> parse_url("github.com/user/repo")
+    ("github.com", "user/repo")
+    >>> parse_url("bitbucket.org/user/repo")
+    ("bitbucket.org", "user/repo")
+    >>> parse_url("gitlab.com/user/repo")
+    ("gitlab.com", "user/repo")
+    >>> parse_url("A quick brown fox jumps over the lazy dog")
+    (None, None)
+    >>> parse_url(None)
+    (None, None)
+    """
+    if url:
+        m = URL_PATTERN.search(url)
+        if m:
+            return m.groups(1), m.groups(2)
+    return (None, None)
 
 
 def gini(x):
