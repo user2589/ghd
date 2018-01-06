@@ -8,7 +8,6 @@ import pandas as pd
 import logging
 import urllib
 import json
-from collections import defaultdict
 
 import scraper
 from common import decorators as d
@@ -24,9 +23,10 @@ fs_cache = d.fs_cache('npm')
 
 
 def _pkginfo_iterator():
-    # url = 'https://skimdb.npmjs.com/registry/_all_docs?include_docs=true'
-    # fh = urllib.urlopen(url)
-    fh = open("../dataset/npm.cache/npm.json")
+    url = 'https://skimdb.npmjs.com/registry/_all_docs?include_docs=true'
+    fh = urllib.urlopen(url)
+    # temporary patch to use locally cached file
+    # fh = open("../dataset/npm.cache/npm.json")
     return ijson.items(fh, 'rows.item')
 
 
@@ -95,10 +95,10 @@ def packages_info():
             yield {
                 'name': package['key'],
                 'url': m and m.group(0),
-                'author': _get_field(package['doc'].get('author', {}), 'email')
+                'author': _get_field(package['doc'].get('author', {}), 'email'),
+                'license': json_path(package, 'doc', 'license')
             }
-    return pd.DataFrame(gen(), columns=('name', 'url', 'author')
-                        ).set_index('name', drop=True)
+    return pd.DataFrame(gen()).set_index('name', drop=True)
 
 
 @fs_cache
@@ -141,6 +141,5 @@ def dependencies():
                     'raw_dependencies': json.dumps(deps)
                 }
 
-    return pd.DataFrame(gen(), columns=(
-        'name', 'version', 'date', "deps", "raw_dependencies")
-                       ).sort_values(['name', 'date']).set_index('name', drop=True)
+    return pd.DataFrame(gen()).sort_values(
+        ['name', 'date']).set_index('name', drop=True)
