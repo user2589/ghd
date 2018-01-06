@@ -16,7 +16,11 @@ logger = logging.getLogger('ghd')
 
 def collect_scraper(package, url):
     logger.info("Processing %s", package)
-    scraper.commits(url)
+    try:
+        scraper.commits(url)
+    except IOError:
+        logger.info("    %s: repo doesn't exist" % package)
+        return
     scraper.issues(url)
     scraper.open_issues(url)
     scraper.commit_stats(url)
@@ -35,6 +39,7 @@ class Command(BaseCommand):
                             type=int, help='Number of workers to use')
 
     def handle(self, *args, **options):
+        # -v 3: DEBUG, 2: INFO, 1: WARNING, 0: ERROR
         loglevel = 40 - 10*options['verbosity']
         logger.setLevel(loglevel)
 
@@ -45,8 +50,12 @@ class Command(BaseCommand):
         workers = min(max(options['workers'], 1), threadpool.CPU_COUNT * 2)
         tp = threadpool.ThreadPool(workers)
 
+        processed = set()
+
         urls = utils.package_urls(options['ecosystem'])
         for package, url in urls.iteritems():
-            tp.submit(collect_scraper, package, url)
+            if url not in processed:
+                processed.add(url)
+                tp.submit(collect_scraper, package, url)
 
         tp.shutdown()

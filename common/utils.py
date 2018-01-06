@@ -46,18 +46,16 @@ def _get_ecosystem(ecosystem):
     return importlib.import_module(ecosystem)
 
 
-@fs_cache
 def package_urls(ecosystem):
     # type: (str) -> pd.DataFrame
     """Get list of packages and their respective GitHub repositories"""
     es = _get_ecosystem(ecosystem)
-    return es.package_urls().dropna().rename("github_url")
+    return es.packages_info()["url"].dropna()
 
 
-@fs_cache
 def package_owners(ecosystem):
     es = _get_ecosystem(ecosystem)
-    return es.package_owners().dropna().rename('owner')
+    return es.packages_info()["author"]
 
 
 @fs_cache

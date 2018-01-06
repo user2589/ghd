@@ -531,7 +531,7 @@ class Package(object):
 
 
 @fs_cache
-def package_info():
+def packages_info():
     tree = ElementTree.fromstring(Package._request("simple/").content)
     package_names = sorted(a.text.lower() for a in tree.iter('a'))
 

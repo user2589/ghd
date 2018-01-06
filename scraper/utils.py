@@ -36,22 +36,22 @@ Only 7 projects (1 commit each) have such commits, so they are safe to ignore
 """
 
 MIN_DATE = "1997"
+# username to be used all unidentified users
 DEFAULT_USERNAME = "-"
 
-github_api = github.GitHubAPI()
-scraper_cache = decorators.typed_fs_cache('scraper')
+fs_cache = decorators.typed_fs_cache('scraper')
 
 logger = logging.getLogger("ghd.scraper")
 
 # mapping of providers to API objects
 # so far it looks like GitHub covers over 99% of projects
 PROVIDERS = {
-    "github.com": github.GitHubAPI,
+    "github.com": github.GitHubAPI(),
     "bitbucket.org": None,
     "gitlab.org": None,
     "sourceforge.net": None,
 }
-# maybe provider-specific patterns?
+
 URL_PATTERN = re.compile(
     "(github\.com|bitbucket\.org|gitlab\.com)/([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)")
 
@@ -80,8 +80,17 @@ def parse_url(url):
     if url:
         m = URL_PATTERN.search(url)
         if m:
-            return m.groups(1), m.groups(2)
-    return (None, None)
+            return m.group(1), m.group(2)
+    return None, None
+
+
+def get_provider(url):
+    provider_name, project_url = parse_url(url)
+    provider = PROVIDERS.get(provider_name)
+    if provider is None:
+        raise NotImplementedError(
+            "Provider %s is not supported (yet?)"%provider_name)
+    return provider, project_url
 
 
 def gini(x):
@@ -111,7 +120,7 @@ def user_stats(stats, date_field, aggregated_field):
     ).astype(np.int)
 
 
-def _zeropad(df, fill_value=0, start=None, pad=3):
+def _zeropad(df, fill_value=0, start=None, pad=0):
     """Ensure monthly index on the passed df, fill in gaps with zeroes"""
     start = start or df.index.min()
     if pd.isnull(start):
@@ -131,20 +140,21 @@ def zeropad(fill_value):
     return decorator
 
 
-@scraper_cache('raw')
-def commits(repo_name):
+@fs_cache('raw')
+def commits(repo_url):
     # type: (str) -> pd.DataFrame
     """
     convert old cache files:
     find -type f -name '*.csv' -exec rename 's/(?<=\/)commits\./_commits./' {} +
     """
+    provider, project_url = get_provider(repo_url)
     return pd.DataFrame(
-        github_api.repo_commits(repo_name),
+        provider.repo_commits(project_url),
         columns=['sha', 'author', 'author_name', 'author_email', 'authored_date',
                  'committed_date', 'parents']).set_index('sha', drop=True)
 
 
-@scraper_cache('aggregate', 2)
+@fs_cache('aggregate', 2)
 def commit_user_stats(repo_name):
     # type: (str) -> pd.DataFrame
     stats = commits(repo_name)
@@ -153,7 +163,7 @@ def commit_user_stats(repo_name):
     return df
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def commit_stats(repo_name):
     # type: (str) -> pd.DataFrame
@@ -162,7 +172,7 @@ def commit_stats(repo_name):
         'authored_date').sum()["commits"]
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def commit_users(repo_name):
     # type: (str) -> pd.DataFrame
@@ -171,7 +181,7 @@ def commit_users(repo_name):
         'authored_date').count()["commits"].rename("users")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(np.nan)
 def commit_gini(repo_name):
     # type: (str) -> pd.DataFrame
@@ -186,16 +196,17 @@ def contributions_quantile(repo_name, q):
                     "authored_date", q)["commits"].rename("q%g" % (q*100))
 
 
-@scraper_cache('raw')
-def issues(repo_name):
+@fs_cache('raw')
+def issues(repo_url):
     # type: (str) -> pd.DataFrame
+    provider, project_url = get_provider(repo_url)
     return pd.DataFrame(
-        github_api.repo_issues(repo_name),
+        provider.repo_issues(project_url),
         columns=['number', 'author', 'closed', 'created_at', 'updated_at',
                  'closed_at']).set_index('number', drop=True)
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 def non_dev_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """Same as new_issues with subtracted issues authored by contributors"""
@@ -208,17 +219,17 @@ def non_dev_issues(repo_name):
     return i.loc[~(i['fc'] < i['created_at']), ['author', 'created_at']]
 
 
-@scraper_cache('aggregate', 2)
+@fs_cache('aggregate', 2)
 def issue_user_stats(repo_name):
     return user_stats(issues(repo_name), "created_at", "new_issues")
 
 
-@scraper_cache('aggregate', 2)
+@fs_cache('aggregate', 2)
 def non_dev_issue_user_stats(repo_name):
     return user_stats(non_dev_issues(repo_name), "created_at", "new_issues")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def new_issues(repo_name):
     # type: (str) -> pd.Series
@@ -226,7 +237,7 @@ def new_issues(repo_name):
     return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def non_dev_issue_stats(repo_name):
     # type: (str) -> pd.Series
@@ -236,7 +247,7 @@ def non_dev_issue_stats(repo_name):
         "non_dev_issues")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def submitters(repo_name):
     # type: (str) -> pd.Series
@@ -245,7 +256,7 @@ def submitters(repo_name):
         'created_at').count()["new_issues"].rename("submitters")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def non_dev_submitters(repo_name):
     # type: (str) -> pd.Series
@@ -254,7 +265,7 @@ def non_dev_submitters(repo_name):
         'created_at').count()["new_issues"].rename("non_dev_submitters")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 def closed_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """New issues aggregated by month"""
@@ -264,7 +275,7 @@ def closed_issues(repo_name):
                     start=df['created_at'].min())
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 def open_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """Open issues aggregated by month"""
@@ -274,15 +285,15 @@ def open_issues(repo_name):
     return res.rename("open_issues")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 def domain_commit_stats(repo_name):
-    cs = _commits(repo_name).reset_index()[['sha', 'author_email']]
+    cs = commits(repo_name).reset_index()[['sha', 'author_email']]
     cs['domain'] = cs['author_email'].map(email.domain)
     return cs[['domain', 'sha']].groupby('domain').count()['sha'].rename(
         'commits').sort_values(ascending=False)
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def commercial_involvement(repo_name):
     cs = commits(repo_name)[['authored_date', 'author_email']]
@@ -293,7 +304,7 @@ def commercial_involvement(repo_name):
     return (stats["commercial"] / stats["commits"]).rename("commercial")
 
 
-@scraper_cache('aggregate')
+@fs_cache('aggregate')
 @zeropad(0)
 def university_involvement(repo_name):
     cs = commits(repo_name)[['authored_date', 'author_email']]
