@@ -3,24 +3,23 @@
 """An abstraction of Python package repository API (PyPi API)."""
 from __future__ import print_function, unicode_literals
 
-import os
-import sys
-import subprocess
-import tempfile
-import requests
-from xml.etree import ElementTree
-import re
-import json
-import shutil
-import logging
-from collections import defaultdict
-
 import pandas as pd
+
+from collections import defaultdict
+import json
+import logging
+import os
+import re
+import requests
+import shutil
+import subprocess
+import sys
+import tempfile
+from xml.etree import ElementTree
 
 from common import decorators as d
 from common import email
-
-# TODO: bugtrack_url support
+import scraper
 
 logger = logging.getLogger("ghd.pypi")
 PY3 = sys.version_info[0] > 2
@@ -37,19 +36,20 @@ TIMEOUT = 10
 # path to provided shell scripts
 _PATH = os.path.dirname(__file__) or '.'
 
-pypi_cache = d.fs_cache('pypi')
+fs_cache = d.fs_cache('pypi')
 
 # supported formats and extraction commands
 unzip = 'unzip -qq -o "%(fname)s" -d "%(dir)s" 2>/dev/null'
 untgz = 'tar -C "%(dir)s" --strip-components 1 -zxf "%(fname)s" 2>/dev/null'
+untbz = 'tar -C "%(dir)s" --strip-components 1 -jxf "%(fname)s" 2>/dev/null'
 # TODO: rpm support
 SUPPORTED_FORMATS = {
     '.zip': unzip,
     '.whl': unzip,
-    '.egg': unzip,
+    '.egg': unzip,  # can't find a single package to test. Are .eggs extinct?
     '.tar.gz': untgz,
     '.tgz': untgz,
-    '.tar.bz2': untgz,
+    '.tar.bz2': untbz,
 }
 
 """
@@ -68,6 +68,18 @@ class PackageDoesNotExist(ValueError):
 
 
 def _shell(cmd, *args, **kwargs):
+    """ Execute shell command and return output
+
+    :param cmd: the command itself, i.e. part until the first space
+    :param args: positional arguments, i.e. other space-separated parts
+    :param kwargs:
+            local: execute relative to package folder directory,
+                for internal use only (create docker images)
+            raise_on_status: bool, raise exception if command
+                exited with non-zero status
+            stderr: file-like object to collect stderr output, None by default
+    :return: (int status, str shell output)
+    """
     if kwargs.get('local', True):
         cmd = os.path.join(_PATH, cmd)
     status = 0
@@ -121,7 +133,9 @@ def compare_versions(ver1, ver2):
 
 
 def _get_builtins(python_version):
-    """Return set of built-in libraries for Python2/3 respectively"""
+    """ Return set of built-in libraries for Python2/3 respectively
+    Intented for parsing imports from source files
+    """
     assert python_version in (2, 3)
     url = "https://docs.python.org/%s/library/index.html" % python_version
     text = requests.get(url, timeout=TIMEOUT, verify=False).text
@@ -212,6 +226,13 @@ class Package(object):
         return releases
 
     def download_url(self, ver):
+        """Get URL to package file of the specified version
+        This function takes into account supported file types and their
+        relative preference (e.g. wheel files before source packages)
+
+        :param ver: str, version string
+        :return: url string if found, None otherwise
+        """
         assert ver in self.info['releases']
         for pkgtype in ("bdist_wheel", "sdist"):
             for info in self.info['releases'][ver]:
@@ -272,11 +293,29 @@ class Package(object):
         # fix permissions (+X = traverse dirs)
         os.system('chmod -R u+rX "%s"' % extract_dir)
 
+        # edge case: zip source archives usually (always?) contain
+        # extra level folder. If after extraction there is a single dir in the
+        # folder, change extract_dir to that folder
+        if download_url.endswith(".zip"):
+            single_dir = None
+            for entry in os.listdir(extract_dir):
+                entry_path = os.path.join(extract_dir, entry)
+                if os.path.isdir(entry_path):
+                    if single_dir is None:
+                        single_dir = entry_path
+                    else:
+                        single_dir = None
+                        break
+            if single_dir:
+                extract_dir = single_dir
+
         return extract_dir
 
     def _info_path(self, ver):
         """
         :return: either xxx.dist-info or xxx.egg-info path, or None
+
+        It is used by dependencies parser and to locate top_level.txt
         """
         extract_dir = self.download(ver)
         if not extract_dir:
@@ -297,6 +336,49 @@ class Package(object):
         """ Return path to wheel dist-info path and main folder
         :param ver: str version
         :return: (.dist-info path, top dir path)
+
+        General idea:
+            - look for top_level.txt in the info folder - egg/wheel packages
+                for single file packages it's a filename without .py
+            - check for a <project name> folder - .zip or tgz archives
+            - any folder with __init__.py
+            - <project name>.py file - single file packages
+            - any folder at all
+            - lastly, if nothing worked, it might be a single file package.
+                Normally, in this case we need to parse out py_modules from
+                setup() parameters, but sandboxing is too expensive. So, the
+                first non-setup .py it is
+        Tests:
+            0.0.1[0.0.1] - tar.gz, dir
+            0[0.0.0] - whl, single file
+            02exercicio[1.0.0] - tar.gz, no files
+            asciaf[1.0.0] - tar.gz, no files
+            0805nexter[1.2.0] - zip, single file
+            4suite-xml[1.2.0] - tar.bz2, __init__ folder
+            a3rt-sdk-py["0.0.3"] - folder not matching canonical name
+            abofly["1.4.0"] - single file, using non-canonical name
+
+        >>> p = Package("0.0.1")
+        >>> bool(p.top_level_dir("0.0.1"))
+        True
+        >>> p = Package("0")
+        >>> bool(p.top_level_dir("0.0.0"))
+        True
+        >>> p = Package("02exercicio")
+        >>> bool(p.top_level_dir("1.0.0"))
+        False
+        >>> p = Package("4suite-xml")
+        >>> bool(p.top_level_dir("1.0.2"))
+        True
+        >>> p = Package("0805nexter")
+        >>> bool(p.top_level_dir("1.2.0"))
+        True
+        >>> p = pypi.Package("a3rt-sdk-py")
+        >>> bool(p.top_level_dir("0.0.3"))
+        True
+        >>> p = pypi.Package("abofly")
+        >>> bool(p.top_level_dir("1.4.0"))
+        True
         """
         logger.debug("Package %s ver %s top folder:", self.name, ver)
 
@@ -305,36 +387,84 @@ class Package(object):
             return None
 
         info_path = self._info_path(ver)
-        dirname = info_path
+        dirname = None
         tl_fname = info_path and os.path.join(info_path, 'top_level.txt')
         if tl_fname and os.path.isfile(tl_fname):
             dirname = os.path.basename(open(tl_fname, 'r').read(80).strip())
             logger.debug("    .. assumed from top_level.txt")
-        elif os.path.isdir(os.path.join(extract_dir, self.name)):
+            if not os.path.isdir(dirname):
+                if os.path.isfile(dirname + ".py"):
+                    dirname += ".py"
+                    logger.debug("    .. single file package")
+                else:
+                    dirname = None
+                    logger.debug("    .. but doesn't exist")
+
+        if not dirname and os.path.isdir(
+                os.path.join(extract_dir, self.canonical_name)):
             # welcome to the darkest year of our adventures, Morti
-            dirname = self.name
+            dirname = self.canonical_name
             logger.debug("    .. assumed from project name")
-        else:  # getting darker..
+
+        if not dirname:  # getting darker..
+            logger.debug("    .. guessing from the first __init__.py")
             for entry in os.listdir(extract_dir):
-                logger.debug("    .. guessing from the first match")
                 if os.path.isfile(
                         os.path.join(extract_dir, entry, "__init__.py")):
                     dirname = entry
                     break
 
+        if not dirname and os.path.isfile(
+                os.path.join(extract_dir, self.canonical_name + ".py")):
+            dirname = self.canonical_name + ".py"
+            logger.debug("    .. assumed from project name (single file)")
+
+        if not dirname:  # any folder at all
+            # Py3 doesn't require __init__.py, so it could be a package folder
+            # unlike info folders, it can't contain a dot in the name
+            logger.debug("    .. any folder at all?")
+            for entry in os.listdir(extract_dir):
+                if "." not in entry and os.path.isdir(
+                        os.path.join(extract_dir, entry)):
+                    dirname = entry
+                    break
+
+        if not dirname:  # any .py file at all
+            logger.debug("    .. any python file?")
+            for entry in os.listdir(extract_dir):
+                if entry.endswith(".py") and entry != "setup.py" and \
+                        os.path.isfile(os.path.join(extract_dir, entry)):
+                    dirname = entry
+                    break
+
         if dirname:
             toplevel = os.path.join(extract_dir, dirname)
-            if os.path.isdir(toplevel):
+            if os.path.isdir(toplevel) or os.path.isfile(toplevel):
                 logging.debug("    top folder: %s", dirname)
                 return toplevel
         logger.info("Top folder was not found or does not exist in package "
                     "%s ver %s", self.name, ver)
 
-    def _search(self, pattern):
-        """Search for a pattern in package info and package content"""
+    @d.cached_property
+    def url(self):
+        """Search for a pattern in package info and package content
+        Search places:
+        - info home page field
+        - full info page
+        - package content
+        :return url if found, None otherwise
+        """
+        # check home page first
+        m = scraper.URL_PATTERN.search(
+                      self.info.get('info', {}).get('home_page') or "")
+        if m:
+            return m.group(0)
+
+        pattern = scraper.named_url_pattern(self.name)
+
         m = re.search(pattern, str(self.info))
         if m:
-            return m.group()
+            return m.group(0)
 
         path = self.top_level_dir(self.latest_ver)
         if not path:  # some packages don't have downloadable files
@@ -343,20 +473,6 @@ class Package(object):
         _, output = _shell("zgrep.sh", pattern, path, raise_on_status=False)
         return output.strip() or None  # output could be empty
 
-    @d.cached_property
-    def github_url(self):
-        # check home page first
-        m = re.search("github\.com/[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+",
-                      self.info.get('info', {}).get('home_page') or "")
-        if m:
-            url = m.group(0)
-        else:
-            url = self._search("github\.com/[a-zA-Z0-9_-]+/" + self.name)
-        return url and url[11:] or ''
-
-    @d.cached_property
-    def google_group(self):
-        return self._search("groups\.google\.com/forum/#!forum/[a-zA-Z0-9_-]*")
 
     @d.cached_method
     def dependencies(self, ver=None):
@@ -414,46 +530,50 @@ class Package(object):
         return loc_size(path)
 
 
-@pypi_cache
-def list_packages():
-    # type: () -> pd.Series
+@fs_cache
+def package_info():
     tree = ElementTree.fromstring(Package._request("simple/").content)
-    s = pd.Series(sorted(a.text.lower() for a in tree.iter('a')),
-                  name="packages")
-    s.index = s
-    return s
+    package_names = sorted(a.text.lower() for a in tree.iter('a'))
 
-
-# TODO: merge package_urls, package_owners and deps_and_size
-@pypi_cache
-def package_urls():
+    names = []  # lsit off package names
     urls = {}  # urls[pkgname] = github_url
+    authors = {}  # authors[pkgname] = author_email
+    licenses = {}
     author_projects = defaultdict(list)
     author_orgs = defaultdict(
         lambda: defaultdict(int))  # orgs[author] = {org: num_packages}
 
-    for pkgname in list_packages():
+    for package_name in package_names:
+        logger.info("Processing %s", package_name)
         try:
-            p = Package(pkgname)
+            p = Package(package_name)
         except PackageDoesNotExist:
             # some deleted packages aren't removed from the list
             continue
-        if p.github_url:
-            urls[pkgname] = p.github_url
+        names.append(package_name)
+
+        if p.url:
+            urls[package_name] = p.url
 
         try:
             author_email = email.clean(p.info["info"].get('author_email'))
         except email.InvalidEmail:
-            continue
+            author_email = None
+        else:
+            author_projects[author_email].append(package_name)
+        authors[package_name] = author_email
+        licenses[package_name] = p.info['info']['license']
 
-        author_projects[author_email].append(pkgname)
-        if p.github_url:
-            github_org = p.github_url.split("/", 1)[0]
-            author_orgs[author_email][github_org] += 1
+        if p.url:
+            provider, project_url = scraper.parse_url(p.url)
+            if provider == "github.com":
+                org, _ = project_url.split()
+                author_orgs[author_email][org] += 1
 
     # at this point, we have ~54K repos
     # by guessing github account from author affiliations we can get 8K more
     for author, packages in author_projects.items():
+        # check all orgs of the author, starting from most used ones
         orgs = [org for org, _ in
                 sorted(author_orgs[author].items(), key=lambda x: -x[1])]
         if not orgs:
@@ -468,34 +588,16 @@ def package_urls():
                     urls[package] = url
                     break
 
-    return pd.Series(urls)
-
-
-@pypi_cache
-def package_owners():
-    authors = {}
-    for pkgname in list_packages():
-        try:
-            p = Package(pkgname)
-        except PackageDoesNotExist:
-            continue
-        try:
-            author_email = email.clean(p.info["info"].get('author_email'))
-        except email.InvalidEmail:
-            continue
-
-        if email:  # sometimes it's empty
-            authors[pkgname] = email
-
-    return pd.Series(authors)
+    return pd.DataFrame({"url": urls, "author": authors, 'license': licenses},
+                        index=names)
 
 
 # Note that this method already uses internal cache. However, we probably don't
 # want to update this cache every time; thus, we have additional caching with
 # @fs_cache instance to make updates in 3 month (d.DEFAULT_EXPIRY) increments
-@pypi_cache
-def deps_and_size():
-    fname = pypi_cache.get_cache_fname(".deps_and_size.cache")
+@fs_cache
+def dependencies():
+    fname = fs_cache.get_cache_fname(".deps_and_size.cache")
 
     if os.path.isfile(fname):
         logger.info("deps_and_size() cache file already exists. "
