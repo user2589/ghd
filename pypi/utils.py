@@ -185,7 +185,11 @@ class Package(object):
             return
         for folder in self._dirs:
             try:
-                shutil.rmtree(folder)
+                # str conversion is required because of this shutil bug:
+                # https://bugs.python.org/issue24672
+                # use tai5_uan5_gian5_gi2_tsu1_liau7_khoo3-tng7_su5_piau1_im1
+                # to test this issue
+                shutil.rmtree(str(folder))
             except OSError:
                 logger.debug("Error removing temp dir after package %s: %s",
                              self.name, folder)
@@ -567,7 +571,7 @@ def packages_info():
         if p.url:
             provider, project_url = scraper.parse_url(p.url)
             if provider == "github.com":
-                org, _ = project_url.split()
+                org, _ = project_url.split("/")
                 author_orgs[author_email][org] += 1
 
     # at this point, we have ~54K repos
