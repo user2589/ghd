@@ -9,9 +9,9 @@ CPU_COUNT = multiprocessing.cpu_count()
 class ThreadPool(object):
     _threads = []
 
-    def __init__(self, n_workers):
-        self.n = n_workers
-        self.exec_semaphore = threading.BoundedSemaphore(n_workers)
+    def __init__(self, n_workers=None):
+        self.n = n_workers or CPU_COUNT
+        self.exec_semaphore = threading.BoundedSemaphore(self.n)
         self.callback_semaphore = threading.Lock()
 
     def submit(self, func, *args, **kwargs):

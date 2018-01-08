@@ -19,14 +19,26 @@ from xml.etree import ElementTree
 
 from common import decorators as d
 from common import email
+from common import threadpool
 import scraper
 
-logger = logging.getLogger("ghd.pypi")
+try:
+    from settings import PYPI_SAVE_PATH
+except ImportError:
+    PYPI_SAVE_PATH = None
+else:
+    if not os.path.isdir(PYPI_SAVE_PATH):
+        os.mkdir(PYPI_SAVE_PATH)
+
 PY3 = sys.version_info[0] > 2
 if PY3:
     from urllib.request import urlretrieve  # Python3
 else:
     from urllib import urlretrieve  # Python2
+
+
+
+logger = logging.getLogger("ghd.pypi")
 
 PYPI_URL = "https://pypi.python.org"
 # directory where package archives are stored
@@ -162,11 +174,12 @@ class Package(object):
     name = None  # package name
     path = None  # path of the file, used to find zgrep
     info = None  # stores cached package info
-    _dirs = []  # created directories to cleanup later
+    _dirs = None  # created directories to cleanup later
 
-    def __init__(self, name, save_path=None):
+    def __init__(self, name):
+        self._dirs = []
         self.name = name.lower()
-        self.save_path = save_path or DEFAULT_SAVE_PATH
+        self.save_path = PYPI_SAVE_PATH or DEFAULT_SAVE_PATH
         try:
             r = self._request("pypi", self.name, "json")
             self.info = r.json()
@@ -212,6 +225,13 @@ class Package(object):
         raise IOError("Failed to reach PyPi. Check your Internet connection.")
 
     def releases(self, include_unstable=False, include_backports=False):
+        """Return release labels
+        :param include_unstable: bool, whether to include releases including
+            symbols other than dots and numbers
+        :param include_backports: bool, whether to include releases smaller in
+            version than last stable release
+        :return list of string release labels
+        """
         releases = sorted([
             (label, min(f['upload_time'][:10] for f in files))
             for label, files in self.info['releases'].items()
@@ -295,7 +315,7 @@ class Package(object):
         os.system(cmd)
 
         # fix permissions (+X = traverse dirs)
-        os.system('chmod -R u+rX "%s"' % extract_dir)
+        os.system('chmod -R u+rwX "%s"' % extract_dir)
 
         # edge case: zip source archives usually (always?) contain
         # extra level folder. If after extraction there is a single dir in the
@@ -493,7 +513,7 @@ class Package(object):
             logger.debug("    .. WHEEL package, parsing from metadata.json")
             fname = os.path.join(info_path, 'metadata.json')
             if not os.path.isfile(fname):
-                return []
+                return {}
             info = json.load(open(fname))
             # only unconditional dependencies are considered
             # http://legacy.python.org/dev/peps/pep-0426/#dependency-specifiers
@@ -505,7 +525,7 @@ class Package(object):
             logger.debug("    .. egg package with info, parsing requires.txt")
             fname = os.path.join(info_path, 'requires.txt')
             if not os.path.isfile(fname):
-                return []
+                return {}
             deps = []
             for line in open(fname, 'r'):
                 if "[" in line:
@@ -515,14 +535,19 @@ class Package(object):
         else:
             if not os.path.isfile(os.path.join(extract_dir, "setup.py")):
                 logger.debug("    .. looks to be a malformed package")
-                return []
+                return {}
             logger.debug("    ..generic package, running setup.py in a sandbox")
             _, output = _shell("docker.sh", extract_dir)
             deps = output.split(",")
 
-        depslist = [re.split("[^\w._-]", dep.strip(), 1)[0].lower()
-                    for dep in deps if dep]
-        return set(dep for dep in depslist if dep)
+        def dep_split(dep):
+            name = re.match("[\w_-]+", dep).group(0)
+            version = dep[len(name):].strip()
+            return name, version
+
+        depslist = dict(dep_split(dep.strip()) for dep in deps if dep.strip())
+
+        return depslist
 
     @d.cached_method
     def size(self, ver):
@@ -601,38 +626,75 @@ def packages_info():
 # @fs_cache instance to make updates in 3 month (d.DEFAULT_EXPIRY) increments
 @fs_cache
 def dependencies():
+    """ Get a bunch of information about npm packages
+    This will return pd.DataFrame with package name as index and columns:
+        - version: version of release, str
+        - date: release date, ISO str
+        - deps: names of dependencies, comma separated string
+        - raw_dependencies: dependencies, JSON dict name: ver
+        - raw_test_dependencies
+        - raw_build_dependencies
+    """
+    deps = {}
     fname = fs_cache.get_cache_fname(".deps_and_size.cache")
 
     if os.path.isfile(fname):
         logger.info("deps_and_size() cache file already exists. "
                     "Existing records will be reused")
-        df = pd.read_csv(fname, index_col=["name"])
+
+        def gen(df):
+            d = {}
+            for index, row in df.iterrows():
+                item = row.to_dict()
+                item["name"] = index[0]
+                item["version"] = index[1]
+                d[tuple(index)] = item
+                return d
+
+        deps = gen(pd.read_csv(fname, index_col=["name", "version"]))
+
     else:
         logger.info("deps_and_size() cache file doesn't exists. "
                     "Computing everything from scratch is a lengthy process "
-                    "and will likely take couple weeks.")
-        df = pd.DataFrame(
-            columns=['name', 'version', 'date', 'dependencies', 'size']
-        ).groupby(["name", "version"]).count()  # shorter way to multiindex
+                    "and will likely take a week or so")
 
-    for package_name in list_packages():
+    tp = threadpool.ThreadPool()
+    package_names = packages_info().index
+
+    def do(pkg_name, ver, release_date):
+        p_deps = Package(pkg_name).dependencies(ver)
+
+        return {
+            'name': pkg_name,
+            'version': version,
+            'date': release_date,
+            'deps': ",".join(p_deps.keys()).lower(),
+            'raw_dependencies': json.dumps(p_deps)
+        }
+
+    def done(output):
+        deps[(output["name"], output["version"])] = output
+
+    for package_name in package_names:
+
         logger.info("Processing %s", package_name)
         try:
             p = Package(package_name)
         except PackageDoesNotExist:
-            # some deleted packages aren't removed from the list
             continue
 
-        for label, date in p.releases():
-            if (p.name, label) not in df.index:
-                df.loc[(p.name, label)] = {
-                    'date': date,
-                    'dependencies': ",".join(p.dependencies(label)),
-                    'size': p.size(label)
-                }
+        for version, release in p.releases(True, True):
+            if (package_name, version) not in deps:
+                logger.info("    %s", version)
+                release_date = min(f['upload_time']
+                                   for f in p.info['releases'][version])
+                tp.submit(do, package_name, version, release_date, callback=done)
+
     # save updates
+    df = pd.DataFrame(deps.values()).sort_values(["name", "version"])
     df.to_csv(fname)
-    return df.reset_index(0).set_index("name")
+
+    return df.set_index(["name", "version"])
 
 
 
