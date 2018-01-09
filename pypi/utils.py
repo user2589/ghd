@@ -588,8 +588,10 @@ def packages_info():
             author_email = email.clean(p.info["info"].get('author_email'))
         except email.InvalidEmail:
             author_email = None
-        else:
+
+        if author_email:
             author_projects[author_email].append(package_name)
+
         authors[package_name] = author_email
         licenses[package_name] = p.info['info']['license']
 
@@ -601,7 +603,11 @@ def packages_info():
 
     # at this point, we have ~54K repos
     # by guessing github account from author affiliations we can get 8K more
+    processed = 0
+    total = len(author_projects)
     for author, packages in author_projects.items():
+        logger.info("Postprocessing authors, (%d out of %d)",
+                    processed, total, author)
         # check all orgs of the author, starting from most used ones
         orgs = [org for org, _ in
                 sorted(author_orgs[author].items(), key=lambda x: -x[1])]
@@ -659,6 +665,8 @@ def dependencies():
                     "and will likely take a week or so")
 
     tp = threadpool.ThreadPool()
+    logger.info("Starting a threadppol with %d workers...", tp.n)
+
     package_names = packages_info().index
 
     def do(pkg_name, ver, release_date):
