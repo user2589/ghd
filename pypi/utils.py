@@ -606,7 +606,7 @@ def packages_info():
     processed = 0
     total = len(author_projects)
     for author, packages in author_projects.items():
-        logger.info("Postprocessing authors, (%d out of %d)",
+        logger.info("Postprocessing authors (%d out of %d): %s",
                     processed, total, author)
         # check all orgs of the author, starting from most used ones
         orgs = [org for org, _ in
