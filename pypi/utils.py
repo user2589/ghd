@@ -506,7 +506,7 @@ class Package(object):
             "Getting dependencies for project %s ver %s", self.name, ver)
         extract_dir = self.download(ver)
         if not extract_dir:
-            return []
+            return {}
 
         info_path = self._info_path(ver) or ""
         if info_path.endswith(".dist-info"):
@@ -541,7 +541,11 @@ class Package(object):
             deps = output.split(",")
 
         def dep_split(dep):
-            name = re.match("[\w_-]+", dep).group(0)
+            match = re.match("[\w_-]+", dep)
+            if not match:  # invalid dependency
+                name = ""
+            else:
+                name = match.group(0)
             version = dep[len(name):].strip()
             return name, version
 
@@ -664,7 +668,7 @@ def dependencies():
                     "Computing everything from scratch is a lengthy process "
                     "and will likely take a week or so")
 
-    tp = threadpool.ThreadPool()
+    tp = threadpool.ThreadPool(16)
     logger.info("Starting a threadppol with %d workers...", tp.n)
 
     package_names = packages_info().index
@@ -691,11 +695,9 @@ def dependencies():
         except PackageDoesNotExist:
             continue
 
-        for version, release in p.releases(True, True):
+        for version, release_date in p.releases(True, True):
             if (package_name, version) not in deps:
                 logger.info("    %s", version)
-                release_date = min(f['upload_time']
-                                   for f in p.info['releases'][version])
                 tp.submit(do, package_name, version, release_date, callback=done)
 
     # save updates
