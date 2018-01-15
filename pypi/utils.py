@@ -699,6 +699,8 @@ def dependencies():
             if (package_name, version) not in deps:
                 logger.info("    %s", version)
                 tp.submit(do, package_name, version, release_date, callback=done)
+            else:
+                logger.info("    %s (cached)", version)
 
     # save updates
     df = pd.DataFrame(deps.values()).sort_values(["name", "version"])
