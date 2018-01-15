@@ -659,7 +659,7 @@ def dependencies():
                 item["name"] = index[0]
                 item["version"] = index[1]
                 d[tuple(index)] = item
-                return d
+            return d
 
         deps = gen(pd.read_csv(fname, index_col=["name", "version"]))
 
@@ -668,17 +668,18 @@ def dependencies():
                     "Computing everything from scratch is a lengthy process "
                     "and will likely take a week or so")
 
-    tp = threadpool.ThreadPool(16)
+    tp = threadpool.ThreadPool(threadpool.CPU_COUNT * 2)
     logger.info("Starting a threadppol with %d workers...", tp.n)
 
     package_names = packages_info().index
 
     def do(pkg_name, ver, release_date):
+        # this method is used by worker threads, calling done() on finish
         p_deps = Package(pkg_name).dependencies(ver)
 
         return {
             'name': pkg_name,
-            'version': version,
+            'version': ver,
             'date': release_date,
             'deps': ",".join(p_deps.keys()).lower(),
             'raw_dependencies': json.dumps(p_deps)
@@ -688,7 +689,6 @@ def dependencies():
         deps[(output["name"], output["version"])] = output
 
     for package_name in package_names:
-
         logger.info("Processing %s", package_name)
         try:
             p = Package(package_name)
@@ -702,11 +702,15 @@ def dependencies():
             else:
                 logger.info("    %s (cached)", version)
 
+    # wait for workers to complete
+    tp.shutdown()
+
     # save updates
-    df = pd.DataFrame(deps.values()).sort_values(["name", "version"])
+    df = pd.DataFrame(deps.values()).sort_values(["name", "version"]).set_index(
+        ["name", "version"], drop=True)
     df.to_csv(fname)
 
-    return df.set_index(["name", "version"])
+    return df
 
 
 
