@@ -52,15 +52,23 @@ PROVIDERS = {
     "sourceforge.net": None,
 }
 
+"""
+>>> URL_PATTERN.search("github.com/jaraco/jaraco.xkcd").group(0)
+'github.com/jaraco/jaraco.xkcd'
+>>> URL_PATTERN.search("bitbucket.org/abcd/efgh&klmn").group(0)
+'bitbucket.org/abcd/efgh'
+"""
 URL_PATTERN = re.compile(
-    "(github\.com|bitbucket\.org|gitlab\.com)/([a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+)")
+    "(github\.com|bitbucket\.org|gitlab\.com)/"
+    "([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)")
 
 
 def named_url_pattern(name):
     """ Return project-specific pattern
     This pattern must be consistent with URL_PATTERN
+    So far it is only used by pypi.Package to search for URL in code
     """
-    return "(github\.com|bitbucket\.org|gitlab\.com)/[a-zA-Z0-9_-]+/" + name
+    return "(github\.com|bitbucket\.org|gitlab\.com)/[a-zA-Z0-9_.-]+/" + name
 
 
 def parse_url(url):
