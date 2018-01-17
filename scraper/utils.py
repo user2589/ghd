@@ -128,24 +128,13 @@ def user_stats(stats, date_field, aggregated_field):
     ).astype(np.int)
 
 
-def _zeropad(df, fill_value=0, start=None, pad=0):
-    """Ensure monthly index on the passed df, fill in gaps with zeroes"""
-    start = start or df.index.min()
+def zeropad(df, fill_value=0):
     if pd.isnull(start):
         idx = []
     else:
         idx = [d.strftime("%Y-%m")
-               for d in pd.date_range(start, 'now', freq="M")][:-pad]
+               for d in pd.date_range(start, 'now', freq="M")]
     return df.reindex(idx, fill_value=fill_value)
-
-
-def zeropad(fill_value):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            return _zeropad(func(*args, **kwargs), fill_value=fill_value)
-        return wrapper
-    return decorator
 
 
 @fs_cache('raw')
@@ -171,8 +160,7 @@ def commit_user_stats(repo_name):
     return df
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def commit_stats(repo_name):
     # type: (str) -> pd.DataFrame
     """Commits aggregated by month"""
@@ -180,8 +168,7 @@ def commit_stats(repo_name):
         'authored_date').sum()["commits"]
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def commit_users(repo_name):
     # type: (str) -> pd.DataFrame
     """Number of contributors by month"""
@@ -189,15 +176,13 @@ def commit_users(repo_name):
         'authored_date').count()["commits"].rename("users")
 
 
-@fs_cache('aggregate')
-@zeropad(np.nan)
+# @fs_cache('aggregate')
 def commit_gini(repo_name):
     # type: (str) -> pd.DataFrame
     return commit_user_stats(repo_name).groupby(
         "authored_date").aggregate(gini)['commits'].rename("gini")
 
 
-@zeropad(0)
 def contributions_quantile(repo_name, q):
     # type: (str, float) -> pd.DataFrame
     return quantile(commit_user_stats(repo_name),
@@ -237,16 +222,14 @@ def non_dev_issue_user_stats(repo_name):
     return user_stats(non_dev_issues(repo_name), "created_at", "new_issues")
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def new_issues(repo_name):
     # type: (str) -> pd.Series
     """New issues aggregated by month"""
     return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def non_dev_issue_stats(repo_name):
     # type: (str) -> pd.Series
     """Same as new_issues, not counting issues submitted by developers"""
@@ -255,8 +238,7 @@ def non_dev_issue_stats(repo_name):
         "non_dev_issues")
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def submitters(repo_name):
     # type: (str) -> pd.Series
     """New issues aggregated by month"""
@@ -264,8 +246,7 @@ def submitters(repo_name):
         'created_at').count()["new_issues"].rename("submitters")
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def non_dev_submitters(repo_name):
     # type: (str) -> pd.Series
     """New issues aggregated by month"""
@@ -301,8 +282,7 @@ def domain_commit_stats(repo_name):
         'commits').sort_values(ascending=False)
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def commercial_involvement(repo_name):
     cs = commits(repo_name)[['authored_date', 'author_email']]
     cs["commercial"] = email.is_commercial_bulk(cs["author_email"])
@@ -312,8 +292,7 @@ def commercial_involvement(repo_name):
     return (stats["commercial"] / stats["commits"]).rename("commercial")
 
 
-@fs_cache('aggregate')
-@zeropad(0)
+# @fs_cache('aggregate')
 def university_involvement(repo_name):
     cs = commits(repo_name)[['authored_date', 'author_email']]
     cs["university"] = email.is_university_bulk(cs["author_email"])
