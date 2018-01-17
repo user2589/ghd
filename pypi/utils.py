@@ -607,11 +607,12 @@ def packages_info():
 
     # at this point, we have ~54K repos
     # by guessing github account from author affiliations we can get 8K more
-    processed = 0
+    processed = 1
     total = len(author_projects)
     for author, packages in author_projects.items():
         logger.info("Postprocessing authors (%d out of %d): %s",
                     processed, total, author)
+        processed += 1
         # check all orgs of the author, starting from most used ones
         orgs = [org for org, _ in
                 sorted(author_orgs[author].items(), key=lambda x: -x[1])]
