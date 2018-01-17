@@ -1,160 +1,48 @@
 
-import collections
-
 import pandas as pd
-import dask
-import dask.threaded
-import dask.multiprocessing
-import dask.dataframe as dd
-from dask.distributed import Client
+
+import collections
 
 from common import threadpool
 
-CONFIG = {
-    'backend': "threaded",
-    'num_threads': 4,  # applies to backends using threads
-    # Dask part
-    'chunk_size': 10,  # dask dataframe chunk size
-    'scheduler': '127.0.0.1:8786'  # dask.distributed scheduler network addr
-}
-
-try:
-    import settings
-    CONFIG.update(getattr(settings, 'MAPREDUCE_OPTIONS', {}))
-except ImportError:
-    pass
-
-
-class Backend(object):
-
-    def __init__(self, data, **config):
-        assert isinstance(data, collections.Iterable), "Iterable expected"
-        self.data = data
-        for key, value in config.items():
-            setattr(self, key, value)
-
-    def map(self, func):
-        raise NotImplemented
-
-    def reduce(self, func):
-        raise NotImplemented
-
-    def resolve(self):
-        raise NotImplemented
-
-
-class ThreadedBackend(Backend):
-
-    def __init__(self, *args, **kwargs):
-        self.num_threads = CONFIG['num_threads']
-        super(ThreadedBackend, self).__init__(*args, **kwargs)
-        self.threadpool = threadpool.ThreadPool(self.num_threads)
-
-    def map(self, func):
-        if func:
-            if isinstance(self.data, pd.DataFrame):
-                data = []
-
-                def callback(res):
-                    data.append(res)
-
-                for _, row in self.data.iterrows():
-                    self.threadpool.submit(func, row)
-
-                self.threadpool.shutdown()
-                self.data = pd.DataFrame(data)
-
-            elif isinstance(self.data, pd.Series):
-                index = []
-                data = []
-
-                def callback(res):
-                    index.append(res[0])
-                    data.append(res[1])
-
-                for i, d in self.data.iteritems():
-                    self.threadpool.submit(func, i, d)
-
-                self.threadpool.shutdown()
-                self.data = pd.Series(data, index=index)
-
-            elif isinstance(self.data, dict):
-                raise NotImplemented
-            else:
-                raise NotImplemented
-
-        return self
-
-    def reduce(self, func):
-        if func:  # just plain synch
-            self.data = func(self.data)
-        return self
-
-    def resolve(self):
-        return self.data
-
-
-class DaskThreadedBackend(ThreadedBackend):
-
-    def __init__(self, *args, **kwargs):
-        self.chunk_size = CONFIG['chunk_size']
-
-        super(DaskThreadedBackend, self).__init__(*args, **kwargs)
-
-        if isinstance(self.data, (pd.DataFrame, pd.Series)):
-            self.data = dd.from_pandas(self.data, chunksize=self.chunk_size)
-        else:
-            self.data = dd.from_array(self.data, chunksize=self.chunk_size)
-
-    def map(self, func):
-        if func:
-            self.data = self.data.apply(func, axis=1)
-        return self
-
-    def resolve(self):
-        with dask.set_options(get=dask.multiprocessing.get):
-            return self.data.compute(num_workers=self.num_threads)
-
-
-class DaskDistributedBackend(Backend):
-    scheduler = CONFIG['scheduler']
-
-    def __init__(self, *args, **kwargs):
-        super(DaskDistributedBackend, self).__init__(*args, **kwargs)
-        self.client = Client(self.scheduler)
-
-    def map(self, func):
-        if func:
-            self.data = self.client.map(func, self.data)
-        return self
-
-    def reduce(self, func):
-        if func:
-            self.data = self.client.submit(func, self.data)
-        return self
-
-    def resolve(self):
-        return self.data.result()
-
-
-_BACKENDS = {
-    'threaded': ThreadedBackend,
-    'dask.threaded': DaskThreadedBackend,
-    'dask.distributed': DaskDistributedBackend
-}
-
 
 class MapReduce(object):
+    """ Helper to process large volumes of information
+    It employes configured backend
+
+    Workflow:
+        (input of every function passed to the next one)
+        preprocess -> map -> reduce -> postprocess
+
+        at least map() or reduce() should be defined.
+        pre/post processing is intended for reusable classes, useless otherwise
+
+    Use:
+        class Processor(MapRedue):
+            # NOTE: all methods are static, i.e. no self
+
+            def preprocess(*data):
+                # gets raw input data
+                return single_object
+
+            def map(key, value)
+                # depending on input, key, value defined as a result of:
+                # .iterrows(), .items(), or enumerate, whatever found first
+                processed_value = process(value)
+                return key, processed_value
+
+
+
+    """
     # change these to override default backend
-    backend = CONFIG['backend']
-    backend_config = {}
+    backend_config = None  # keywords to init backend object (Threadpool)
 
     # methods
     preprocess = None
     map = None
     reduce = None
     postprocess = None
-
+    @staticmethod
     def __new__(cls, data):
         """ An intro to Python object creation:
         1. Python checks for metaclass
@@ -185,18 +73,45 @@ class MapReduce(object):
         assert cls.map or cls.reduce, "MapReduce subclasses are expected to " \
                                       "have at least one of map() or reduce()" \
                                       " methods defined."
-        assert CONFIG['backend'] in _BACKENDS, "Unsupported MapReduce backend"
 
         if cls.preprocess:
-            # preliminary manipulations with input data.
-            # E.g. remove outliers, slice time series etc
             data = cls.preprocess(data)
 
-        backend = _BACKENDS[cls.backend](data, **cls.backend_config)
+        assert isinstance(data, collections.Iterable), "Iterable expected"
 
-        result = backend.map(cls.map).reduce(cls.reduce).resolve()
+        if cls.map:
+            backend = threadpool.ThreadPool(**(cls.backend_config or {}))
+            iterable = None
+            for method in ('iterrows', 'items'):
+                if hasattr(data, method):
+                    iterable = getattr(data, method)()
+                    break
+            if iterable is None:
+                iterable = enumerate(data)
+
+            mapped = {}
+
+            def collect(res):
+                key, value = res
+                mapped[key] = value
+
+            for key, value in iterable:
+                backend.submit(cls.map, key, value, callback=collect)
+            backend.shutdown()
+
+            if isinstance(data, pd.DataFrame):
+                data = pd.DataFrame.from_dict(mapped, orient='index').reindex(data.index)
+            elif isinstance(data, pd.Series):
+                data = pd.Series(mapped).reindex(data.index)
+            elif isinstance(data, (list, tuple)):
+                data = type(data)(mapped[i] for i in range(len(mapped)))
+            else:
+                data = mapped
+
+        if cls.reduce:
+            data = cls.reduce(data)
 
         if cls.postprocess:
-            result = cls.postprocess(result)
+            data = cls.postprocess(data)
 
-        return result
+        return data
