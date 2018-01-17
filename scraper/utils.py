@@ -93,22 +93,43 @@ def parse_url(url):
 
 
 def get_provider(url):
+    # type: (str) -> (str, str)
+    """ Separate provided URL into parovider and provider-specific project ID
+    :param url: url matching URL_PATTERN
+    :return: (provider, project_id)
+
+    >>> prov, proj_id = get_provider("github.com/abc/def")
+    >>> isinstance(prov, github.GitHubAPI)
+    True
+    >>> proj_id
+    'abc/def'
+    """
     provider_name, project_url = parse_url(url)
     provider = PROVIDERS.get(provider_name)
     if provider is None:
         raise NotImplementedError(
-            "Provider %s is not supported (yet?)"%provider_name)
+            "Provider %s is not supported (yet?)" % provider_name)
     return provider, project_url
 
 
 def gini(x):
-    # simplified version from https://github.com/oliviaguest/gini
+    """ Gini index of a given iterable
+    simplified version from https://github.com/oliviaguest/gini
+
+    >>> round(gini([1]*99 + [10**6]))
+    0.99
+    >>> round(gini([1]*100), 2)
+    0.0
+    >>> round(gini(range(100)), 2)
+    0.34
+    """
     n = len(x) * 1.0
     return np.sort(x).dot(2 * np.arange(n) - n + 1) / (n * np.sum(x))
 
 
 def quantile(df, column, q):
     # type: (pd.DataFrame, str, float) -> pd.DataFrame
+    # TODO: test
     def agg(x):
         return sum(x.sort_values(ascending=False).cumsum() / x.sum() <= q)
 
@@ -129,6 +150,17 @@ def user_stats(stats, date_field, aggregated_field):
 
 
 def zeropad(df, fill_value=0):
+    """Ensure monthly index on the passed df, fill in gaps with zeroes
+    >>> df = pd.DataFrame([1,1,1], index=["2017-01", "2016-12", "2017-09"])
+    >>> zp = zeropad(df)
+    >>> zp.index.min()
+    '2016-12'
+    >>> zp.index.max() >= "2017-12"
+    True
+    >>> 13 <= len(zp) <= 50
+    True
+    """
+    start = df.index.min()
     if pd.isnull(start):
         idx = []
     else:
@@ -143,35 +175,63 @@ def commits(repo_url):
     """
     convert old cache files:
     find -type f -name '*.csv' -exec rename 's/(?<=\/)commits\./_commits./' {} +
+
+    >>> cs = commits("github.com/benjaminp/six")
+    >>> isinstance(commits, pd.DataFrame)
+    True
+    >>> len(commits) > 400
+    True
+    >>> # non-existent repository
+    >>> len(commits("github.com/user2589/nothingtoseehere")) == 0
+    True
     """
     provider, project_url = get_provider(repo_url)
     return pd.DataFrame(
         provider.repo_commits(project_url),
-        columns=['sha', 'author', 'author_name', 'author_email', 'authored_date',
-                 'committed_date', 'parents']).set_index('sha', drop=True)
+        columns=['sha', 'author', 'author_name', 'author_email',
+                 'authored_date', 'committed_date', 'parents']
+    ).set_index('sha', drop=True)
 
 
 @fs_cache('aggregate', 2)
 def commit_user_stats(repo_name):
     # type: (str) -> pd.DataFrame
     stats = commits(repo_name)
+    # check for null and empty string is required because of file caching.
+    # commits scraped immediately will have empty string, but after save/load
+    # it will be converted to NaN by pandas
+    min_date = stats.loc[pd.isnull(stats["parents"]) | (stats["parents"] == ""),
+                         "authored_date"].min()
+    stats = stats[stats["authored_date"] >= min_date]
     stats['author'] = stats['author'].fillna(DEFAULT_USERNAME)
-    df = user_stats(stats, "authored_date", "commits")
-    return df
+    return user_stats(stats, "authored_date", "commits")
 
 
 # @fs_cache('aggregate')
 def commit_stats(repo_name):
-    # type: (str) -> pd.DataFrame
-    """Commits aggregated by month"""
-    return commit_user_stats(repo_name).groupby(
-        'authored_date').sum()["commits"]
+    # type: (str) -> pd.Series
+    """Commits aggregated by month
+    >>> cs = commit_stats("github.com/django/django")
+    >>> isinstance(cs, pd.Series)
+    True
+    >>> 140 < len(cs) < 240
+    True
+    """
+    cus = commit_user_stats(repo_name)
+    cs = cus.groupby('authored_date').sum()["commits"]
+    return zeropad(cs)
 
 
 # @fs_cache('aggregate')
 def commit_users(repo_name):
-    # type: (str) -> pd.DataFrame
-    """Number of contributors by month"""
+    # type: (str) -> pd.Series
+    """Number of contributors by month
+    >>> cu = commit_users("github.com/django/django")
+    >>> isinstance(cu, pd.Series)
+    True
+    >>> 140 < len(cu) < 240)
+    True
+    """
     return commit_user_stats(repo_name).groupby(
         'authored_date').count()["commits"].rename("users")
 
@@ -179,12 +239,30 @@ def commit_users(repo_name):
 # @fs_cache('aggregate')
 def commit_gini(repo_name):
     # type: (str) -> pd.DataFrame
+    """
+
+    >>> g = commit_gini("github.com/django/django")
+    >>> isinstance(g, pd.Series)
+    True
+    >>> 140 < len(g) < 240
+    True
+    >>> all(0 <= i <= 1 for i in g)
+    True
+    """
     return commit_user_stats(repo_name).groupby(
         "authored_date").aggregate(gini)['commits'].rename("gini")
 
 
 def contributions_quantile(repo_name, q):
     # type: (str, float) -> pd.DataFrame
+    """
+    >>> q50 = contributions_quantile("django/django", 0.5)
+    >>> isinstance(q50, pd.Series)
+    True
+    >>> 140 < len(q50) < 240)
+    True
+    >>> all(i >= 0 for i in q50)
+    """
     return quantile(commit_user_stats(repo_name),
                     "authored_date", q)["commits"].rename("q%g" % (q*100))
 
@@ -192,6 +270,16 @@ def contributions_quantile(repo_name, q):
 @fs_cache('raw')
 def issues(repo_url):
     # type: (str) -> pd.DataFrame
+    """ Get a dataframe with issues
+
+    >>> issues = issues("github.com/benjaminp/six")
+    >>> isinstance(issues, pd.DataFrame)
+    True
+    >>> len(issues) > 180
+    True
+    >>> len(issues("github.com/user2589/ghd")) == 0
+    True
+    """
     provider, project_url = get_provider(repo_url)
     return pd.DataFrame(
         provider.repo_issues(project_url),
@@ -202,7 +290,15 @@ def issues(repo_url):
 @fs_cache('aggregate')
 def non_dev_issues(repo_name):
     # type: (str) -> pd.DataFrame
-    """Same as new_issues with subtracted issues authored by contributors"""
+    """Same as new_issues with subtracted issues authored by contributors
+
+    >>> iss = non_dev_issues("github.com/benjaminp/six")
+    >>> isinstance(iss, pd.DataFrame)
+    True
+    >>> # 16 issues as of Aug 2017
+    >>> len(issues) > 15
+    True
+    """
     cs = commits(repo_name)[['authored_date', 'author']]
     fc = cs.loc[pd.notnull(cs['author'])].groupby(
         'author').min()['authored_date']
@@ -225,14 +321,31 @@ def non_dev_issue_user_stats(repo_name):
 # @fs_cache('aggregate')
 def new_issues(repo_name):
     # type: (str) -> pd.Series
-    """New issues aggregated by month"""
+    """ New issues aggregated by month
+
+    >>> issues = new_issues("github.com/pandas-dev/pandas")
+    >>> isinstance(issues, pd.Series)
+    True
+    >>> 78 < len(issues) < 100
+    True
+
+    """
     return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
 
 
 # @fs_cache('aggregate')
 def non_dev_issue_stats(repo_name):
     # type: (str) -> pd.Series
-    """Same as new_issues, not counting issues submitted by developers"""
+    """Same as new_issues, not counting issues submitted by developers
+    >>> ndi = non_dev_issue_stats("github.com/pandas-dev/pandas")
+    >>> isinstance(ndi, pd.Series)
+    True
+    >>> 78 < len(ndi) < 180
+    True
+    >>> iss = new_issues("github.com/pandas-dev/pandas")
+    >>> all(iss >= ndi)
+    True
+    """
     i = non_dev_issues(repo_name)
     return i.groupby(i['created_at'].str[:7]).count()['created_at'].rename(
         "non_dev_issues")
@@ -241,7 +354,19 @@ def non_dev_issue_stats(repo_name):
 # @fs_cache('aggregate')
 def submitters(repo_name):
     # type: (str) -> pd.Series
-    """New issues aggregated by month"""
+    """Number of submitters aggregated by month
+
+    >>>  ss = submitters("github.com/pandas-dev/pandas")
+    >>> isinstance(submitters, pd.Series)
+    True
+    >>> 78 < len(ss) < 180
+    True
+    >>> all(s >= 0 for s in ss)
+    True
+    >>> iss = new_issues("github.com/pandas-dev/pandas")
+    >>> all(iss >= ss)
+    True
+    """
     return issue_user_stats(repo_name).groupby(
         'created_at').count()["new_issues"].rename("submitters")
 
@@ -260,8 +385,7 @@ def closed_issues(repo_name):
     """New issues aggregated by month"""
     df = issues(repo_name)
     closed = df.loc[df['closed'], 'closed_at'].astype(object)
-    return _zeropad(closed.groupby(closed.str[:7]).count(),
-                    start=df['created_at'].min())
+    return closed.groupby(closed.str[:7]).count()
 
 
 @fs_cache('aggregate')

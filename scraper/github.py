@@ -234,6 +234,7 @@ class GitHubAPI(object):
     def user_info(self, user):
         # TODO: support pagination
         # might throw RepoDoesNotExist:
+        # Docs: https://developer.github.com/v3/users/#response
         return self.request("users/" + user)
 
     def org_members(self, org):
