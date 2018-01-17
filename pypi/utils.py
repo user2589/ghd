@@ -541,7 +541,7 @@ class Package(object):
             deps = output.split(",")
 
         def dep_split(dep):
-            match = re.match("[\w_-]+", dep)
+            match = re.match("[\w_.-]+", dep)
             if not match:  # invalid dependency
                 name = ""
             else:
