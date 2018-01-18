@@ -23,22 +23,10 @@ ECOSYSTEMS = {
 logger = logging.getLogger("ghd")
 fs_cache = d.fs_cache('common')
 
-SUPPORTED_ECOSYSTEMS = ('npm', 'pypi')
-
-SUPPORTED_METRICS = {
-    'commits': scraper.commit_stats,
-    # 'contributors': scraper.commit_users,
-    'gini': scraper.commit_gini,
-    'q50': lambda repo: scraper.contributions_quantile(repo, 0.5),
-    'q70': lambda repo: scraper.contributions_quantile(repo, 0.7),
-    'q90': lambda repo: scraper.contributions_quantile(repo, 0.9),
-    'issues': scraper.new_issues,
-    'closed_issues': scraper.closed_issues,
-    'non_dev_issues': scraper.non_dev_issue_stats,
-    'submitters': scraper.submitters,
-    'non_dev_submitters': scraper.non_dev_submitters,
-    'commercial': scraper.commercial_involvement,
-    'university': scraper.university_involvement,
+# TODO: deprecate START_DATES
+START_DATES = {  # default start dates for ecosystem datasets
+    'npm': '2010',
+    'pypi': '2005'
 }
 
 
@@ -109,7 +97,7 @@ def contributors(ecosystem, months=1):
                    for d in pd.date_range(start, 'now', freq="M")][:-3]
 
         def gen():
-            for package, repo in package_urls(ecosystem).iteritems():
+            for package, repo in package_urls(ecosystem).items():
                 logger.info("Processing %s: %s", package, repo)
                 s = scraper.commit_user_stats(repo).reset_index()[
                     ['authored_date', 'author']].groupby('authored_date').agg(
@@ -165,11 +153,11 @@ def connectivity(ecosystem, months=1000):
             conn = []
 
             projects = defaultdict(set)
-            for project, users in row.iteritems():
+            for project, users in row.items():
                 for user in users:
                     projects[user].add(project)
 
-            for project, users in row.iteritems():
+            for project, users in row.items():
                 ps = set().union(*[projects[user] for user in users])
                 conn.append(sum(owners[p] != owners[project] for p in ps))
 
@@ -202,9 +190,11 @@ def account_data(ecosystem):
 def upstreams(ecosystem):
     # type: (str) -> pd.DataFrame
     # ~12s without caching
-    es = _get_ecosystem(ecosystem)
-    deps = es.deps_and_size().sort_values("date")
-    deps['dependencies'] = deps['dependencies'].map(
+    es = get_ecosystem(ecosystem)
+    deps = es.dependencies().sort_values("date")
+    # will drop 101 record out of 4M for npm
+    deps = deps[pd.notnull(deps["date"])]
+    deps['deps'] = deps['deps'].map(
         lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
 
     idx = [d.strftime("%Y-%m")  # start is around 2005
@@ -406,152 +396,74 @@ def contributors_centrality(ecosystem, start_date, centrality_type, months, *arg
     return contras.apply(gen, axis=0).fillna(0)
 
 
-@fs_cache
-def monthly_dataset(ecosystem, start_date='2008'):
-    # TODO: more descriptive name to distinguish from monthly_data
-    fcd = _fcd(ecosystem, start_date)
-    mddfs = {metric: monthly_data(ecosystem, metric).loc[:, start_date:]
-             for metric in ("commits", "contributors", "gini", "q50", "q70",
-                            "issues", "closed_issues", "submitters",
-                            "non_dev_submitters", "non_dev_issues", "q90",
-                            "commercial", "university")}
+def slice(project_name, url):
+    cs = scraper.commit_stats(url)
+    if not len(cs):  # repo does not exist
+        return None
 
-    mddfs['dead'] = dead_projects(ecosystem).loc[:, start_date:]
+    df = pd.DataFrame({
+        'age': range(len(cs)),
+        'project': project_name,
+        'dead': None,
+        'last_observation': 0,
+        'commercial': scraper.commercial_involvement(url).reindex(
+            cs.index, fill_value=0),
+        'university': scraper.university_involvement(url).reindex(
+            cs.index, fill_value=0),
+        'org': False,  # FIXME
+        'license': None,  # FIXME
+        'commits': cs,
+        'q50': scraper.contributions_quantile(url, 0.5).reindex(
+            cs.index, fill_value=0),
+        'q70': scraper.contributions_quantile(url, 0.7).reindex(
+            cs.index, fill_value=0),
+        'q90': scraper.contributions_quantile(url, 0.9).reindex(
+            cs.index, fill_value=0),
+        'gini': scraper.commit_gini(url).reindex(
+            cs.index),
+        'issues': scraper.new_issues(url).reindex(
+            cs.index, fill_value=0),
+        'non_dev_issues': scraper.non_dev_issue_stats(url).reindex(
+            cs.index, fill_value=0),
+        'submitters': scraper.submitters(url).reindex(
+            cs.index, fill_value=0),
+        'non_dev_submitters': scraper.non_dev_submitters(url).reindex(
+            cs.index, fill_value=0),
+        'downstreams': None,  # FIXME
+        'upstreams': None,  # FIXME
+        't_downstreams': None,
+        't_upstreams': None,
+        'cc_X': None,
+        'dc_X': None
+    })
 
-    # TODO: to be replaced by centrality
-    logger.info("Connectivity..")
-    mddfs['connectivity1'] = connectivity(ecosystem, 1)
-    mddfs['connectivity3'] = connectivity(ecosystem, 3)
-    mddfs['connectivity6'] = connectivity(ecosystem, 6)
-    mddfs['connectivity12'] = connectivity(ecosystem, 12)
-    mddfs['connectivity1000'] = connectivity(ecosystem, 1000)
+    # FIXME: df = pd.rolling_mean(window=smoothing, center=False)
+    # FIXME: set last_observation iloc[-1] to 1
 
-    logger.info("Contributors..")
-    mddfs['contributors1'] = active_contributors(ecosystem, 1)
-    mddfs['contributors3'] = active_contributors(ecosystem, 3)
-    mddfs['contributors6'] = active_contributors(ecosystem, 6)
-    mddfs['contributors12'] = active_contributors(ecosystem, 12)
+    return df
 
-    # TODO: to be replaced by count_X
-    logger.info("Dependencies..")
-    mddfs['upstreams'] = count_upstreams(ecosystem, start_date, False, False)
-    mddfs['c_upstreams'] = count_upstreams(ecosystem, start_date, False, True)
-    mddfs['a_upstreams'] = count_upstreams(ecosystem, start_date, True, False)
-    mddfs['ac_upstreams'] = count_upstreams(ecosystem, start_date, True, True)
 
-    mddfs['downstreams'] = count_downstreams(ecosystem, start_date, False, False)
-    mddfs['c_downstreams'] = count_downstreams(ecosystem, start_date, False, True)
-    mddfs['a_downstreams'] = count_downstreams(ecosystem, start_date, True, False)
-    mddfs['ac_downstreams'] = count_downstreams(ecosystem, start_date, True, True)
-
-    logger.info("Dependencies centrality...")
-    for ctype in('degree', 'in_degree', 'out_degree', 'katz', 'load', 'closeness', 'dispersion'):
-        mddfs['dc_'+ctype] = dependencies_centrality("pypi", "2008", ctype)
-
-    logger.info("Contributors centrality...")
-    m = 1
-    for ctype in('betweenness', "closeness", "degree", "edge_betweenness",
-                 "edge_load", "estrada_index", "global_reaching", "harmonic",
-                 "load", "subgraph", "subgraph_centrality_exp"):
-        mddfs['cc_%s_%s'%(ctype, m)] = contributors_centrality(
-            "pypi", "2008", ctype, m)
-    m = 3
-    for ctype in("closeness", "degree"):
-        mddfs['cc_%s_%s'%(ctype, m)] = contributors_centrality(
-            "pypi", "2008", ctype, m)
-
-    logger.info("Constructing dataframe..")
+def survival_data(ecosystem, smoothing=1):
+    """
+    :param ecosystem: ("npm"|"pypi")
+    :param smoothing:  number of month to average over
+    :return: pd.Dataframe with columns:
+         age, date, project, dead, last_observation
+         commercial, university, org, license,
+         commits, contributors, q50, q70, q90, gini,
+         issues, non_dev_issues, submitters, non_dev_submitters
+         downstreams, upstreams, transitive downstreams, transitive upstreams,
+         contributors centrality,
+         dependencies centrality
+    """
+    # es = get_ecosystem(ecosystem)
+    log = logging.getLogger("ghd.common.survival_data")
 
     def gen():
-        for package, start in fcd.iteritems():
-            logger.info("Processing %s", package)
-            idx = mddfs["commits"].loc[package, start:].index
-            df = pd.DataFrame({
-                'project': package,
-                'date': idx,
-                'age': np.arange(len(idx))
-            })
-            for metric, mddf in mddfs.items():
-                if package in mddf.index:
-                    df[metric] = mddf.loc[package, idx].fillna(0).values
-                else:  # upstream/downstream for packages without releases
-                    df[metric] = 0
-            for _, row in df.iterrows():
+        for project_name, url in package_urls(ecosystem).items():
+            log.info(url)
+            df = slice(project_name, url)
+            for _, row in df:
                 yield row
 
     return pd.DataFrame(gen()).reset_index(drop=True)
-
-
-def survival_data(ecosystem, start_date="2008"):
-    md = monthly_dataset(ecosystem, start_date)
-    md['dead'] = (md['dead'] == "True")
-
-    # strip right 12 month used to predict death
-    window = 12
-    max_age = md[["project", "age"]].groupby(
-        'project').max()["age"].rename("max_age") - window
-    md['max_age'] = md["project"].map(max_age)
-    # should be done before cutting to max_age to remove last observation
-    # (it is shifted from the next project)
-    md["dead"] = md["dead"].shift(-1).fillna(method='ffill').astype(bool)
-    # remove last <window> month used to find out if the project is dead
-    md = md.loc[md["age"] <= md["max_age"]]
-
-    # for dead projects, remove everything after the first death
-    death = md[["project", "age"]].loc[md["dead"]].groupby('project').min()[
-        "age"].rename("death")
-    md['death'] = md["project"].map(death)
-    # there is no afterlife, everything just goes black
-    md = md.loc[(md["death"] >= md["age"]) | pd.isnull(md["death"])]
-
-    # avg academic involvement
-    md["uni"] = md["university"] * md["commits"]
-    uni = md[["project", "uni", "commits"]].groupby('project').sum()
-    md["uni"] = md["project"].map(uni["uni"] / uni["commits"])
-
-    # average commercial involvement
-    md["comm"] = md["commercial"] * md["commits"]
-    comm = md[["project", "comm", "commits"]].groupby('project').sum()
-    md["comm"] = md["project"].map(comm["comm"] / comm["commits"])
-
-    # trivial vs. non-trivial
-    max_contrib = md[["project", "contributors"]].groupby('project').max()[
-        "contributors"]
-    md["max_contrib"] = md["project"].map(max_contrib)
-
-    ad = account_data("pypi")
-    ad.index = ad.index.str.lower()
-
-    urls = package_urls(ecosystem)
-    logins = urls.map(lambda s: s.split("/", 1)[0].lower())
-
-    md['org'] = md['project'].map(logins).map(ad['org'])
-    # assume deleted accounts to be non-org
-    md['org'] = md['org'].fillna(False)
-    # alternatively, # will drop 5500 rows /662 projects (deleted accounts)
-    # sd = sd.loc[pd.notnull(sd['org'])]
-    md['org'] = md['org'].astype(
-        int)  # bool - is it an organization or personal account
-
-    md['d_upstreams0'] = (md['upstreams'] - md['a_upstreams'] > 0).astype(int)
-    md["dead"] = md["dead"].astype(int)
-
-    # not used anymore
-    # sd['zero'] = 0
-    # sd['connectivity1'] = sd[['connectivity1', 'zero']].max(axis=1)
-    # sd['connectivity3'] = sd[['connectivity3', 'zero']].max(axis=1)
-    # sd['connectivity6'] = sd[['connectivity6', 'zero']].max(axis=1)
-
-    return md.drop(columns=[
-        'ac_downstreams', 'ac_upstreams', 'c_downstreams', 'c_upstreams',
-        'cc_betweenness_1', 'cc_degree_1', 'cc_degree_3',
-        'cc_edge_betweenness_1', 'cc_edge_load_1', 'cc_global_reaching_1',
-        'cc_harmonic_1', 'cc_load_1', 'cc_subgraph_1',
-        'cc_subgraph_centrality_exp_1',
-        'connectivity1', 'connectivity12', 'connectivity3', 'connectivity6',
-        'contributors12', 'contributors3', 'contributors6',
-        'dc_closeness', 'dc_degree', 'dc_dispersion', 'dc_in_degree', 'dc_load',
-        'dc_out_degree',
-        'death', 'max_age',
-        'na_downstreams', 'nac_downstreams', 'nc_downstreams', 'ndownstreams'
-    ])
