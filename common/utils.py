@@ -126,11 +126,6 @@ def contributors(ecosystem, months=1):
 
 
 @fs_cache
-def active_contributors(ecosystem, months=1):
-    return count_dependencies(contributors(ecosystem, months))
-
-
-@fs_cache
 def connectivity(ecosystem, months=1000):
     # type: (str, int) -> pd.DataFrame
     """ Number of projects focal project is connected to via its developers
@@ -215,7 +210,7 @@ def downstreams(uss):
 
     def gen(row):
         s = defaultdict(set)
-        for pkg, dss in row.iteritems():
+        for pkg, dss in row.items():
             if dss and pd.notnull(dss):
                 # add package as downstream to each of upstreams
                 for ds in dss:
@@ -247,78 +242,20 @@ def cumulative_dependencies(deps):
     return deps.apply(gen, axis=0)
 
 
-def count_dependencies(df):
+def count_values(df):
     # type: (pd.DataFrame) -> pd.DataFrame
+    """ Count number of values in lists/sets
+    It is initially introduced to count dependencies
+    """
     # takes around 20s for full pypi history
-    return df.applymap(lambda s: len(s) if s and pd.notnull(s) else 0)
 
+    def count(s):
+        return len(s) if s and pd.notnull(s) else 0
 
-def _fcd(ecosystem, start_date):
-    es = _get_ecosystem(ecosystem)
-    fcd = first_contrib_dates(ecosystem).dropna().str[:7]
-    fcd = fcd[fcd > start_date]
-    deps = es.deps_and_size()
-    # first_release_date
-    frd = deps["date"].groupby("name").min().reindex(fcd.index).fillna("9999")
-    # remove packages which were released before first commits
-    # usually those are imports from other VCSes
-    return fcd[fcd <= frd]  # drops 623 packages
-
-
-@fs_cache
-def dead_projects(ecosystem):
-    # definition of dead: <= 1 commit per month on average in a year
-    # or, if commits data unavailable, over 1 year since last release
-    es = _get_ecosystem(ecosystem)
-    deps = es.deps_and_size()
-    commits = monthly_data(ecosystem, "commits")
-    last_release = deps[['date']].groupby("name").max()
-    death_date = pd.to_datetime(last_release['date'], format="%Y-%m-%d") + \
-        datetime.timedelta(days=365)
-    death_str = death_date.dt.strftime("%Y-%m-%d")
-
-    dead = pd.DataFrame([(death_str <= month).rename(month)
-                         for month in commits.columns]).T
-    sure_dead = (commits.T[::-1].rolling(
-                 window=12, min_periods=1).max() <= 1)[::-1].T.astype(bool)
-    dead.update(sure_dead)
-    return dead
-
-
-# TODO:
-# network centrality dependencies
-# network centrality contributors
-
-def _count_deps(deps, ecosystem, start_date, active_only, transitive):
-    dead = dead_projects(ecosystem).loc[:, start_date:]
-    deps = deps.loc[dead.index, dead.columns]
-    if active_only:
-        deps = deps.where(~dead)
-    if transitive:
-        deps = cumulative_dependencies(deps)
-    return count_dependencies(deps)
-
-
-@fs_cache
-def count_downstreams(ecosystem, start_date, active_only=False, transitive=False):
-    return _count_deps(
-        downstreams(ecosystem), ecosystem, start_date, active_only, transitive)
-
-
-@fs_cache
-def count_upstreams(ecosystem, start_date, active_only, transitive):
-    return _count_deps(
-        upstreams(ecosystem), ecosystem, start_date, active_only, transitive)
-
-
-def nx_graph(connections):
-    """
-    :param connections: pd.Dataframe, where columns are months and rows are
-            packages. Cells contain
-
-    :return:
-    """
-    pass
+    if isinstance(df, pd.DataFrame):
+        return df.applymap(count)
+    elif isinstance(df, pd.Series):
+        return df.apply(count)
 
 
 def centrality(how, graph, *args, **kwargs):
@@ -346,7 +283,7 @@ def dependencies_centrality(ecosystem, start_date, centrality_type):
         # stub = uss column
         logger.info("Processing %s", stub.name)
         g = nx.DiGraph()
-        for pkg, us in stub.iteritems():
+        for pkg, us in stub.items():
             if not us or pd.isnull(us):
                 continue
             for u in us:  # u is upstream name
@@ -367,9 +304,8 @@ def contributors_centrality(ecosystem, start_date, centrality_type, months, *arg
     communicability - doesn't work, internal error
     subgraph - unknown (update nx?)
     local_reaching - requires v
-
     """
-    contras = contributors(ecosystem, months).loc[:, start_date:]
+    contras = contributors(ecosystem, months)
     # {in|out}_degree is not defined for undirected graphs
 
     def gen(stub):
