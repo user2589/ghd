@@ -6,6 +6,38 @@ import collections
 from common import threadpool
 
 
+def map(data, func, num_workers=None):
+    backend = threadpool.ThreadPool(n_workers=num_workers)
+    iterable = None
+    for method in ('iterrows', 'items'):
+        if hasattr(data, method):
+            iterable = getattr(data, method)()
+            break
+    if iterable is None:
+        iterable = enumerate(data)
+
+    mapped = {}
+
+    def collect(key):
+        def process(res):
+            mapped[key] = res
+        return process
+
+    for key, value in iterable:
+        backend.submit(func, key, value, callback=collect(key))
+    backend.shutdown()
+
+    if isinstance(data, pd.DataFrame):
+        return pd.DataFrame.from_dict(
+            mapped, orient='index').reindex(data.index)
+    elif isinstance(data, pd.Series):
+        return pd.Series(mapped).reindex(data.index)
+    else:
+        # in Python, hash(<int>) := <int>, so guaranteed to be in order for list
+        # and tuple. For other types
+        return type(data)(mapped)
+
+
 class MapReduce(object):
     """ Helper to process large volumes of information
     It employes configured backend
@@ -31,11 +63,9 @@ class MapReduce(object):
                 processed_value = process(value)
                 return key, processed_value
 
-
-
     """
     # change these to override default backend
-    backend_config = None  # keywords to init backend object (Threadpool)
+    n_workers = None  # keywords to init backend object (Threadpool)
 
     # methods
     preprocess = None
@@ -80,33 +110,7 @@ class MapReduce(object):
         assert isinstance(data, collections.Iterable), "Iterable expected"
 
         if cls.map:
-            backend = threadpool.ThreadPool(**(cls.backend_config or {}))
-            iterable = None
-            for method in ('iterrows', 'items'):
-                if hasattr(data, method):
-                    iterable = getattr(data, method)()
-                    break
-            if iterable is None:
-                iterable = enumerate(data)
-
-            mapped = {}
-
-            def collect(res):
-                key, value = res
-                mapped[key] = value
-
-            for key, value in iterable:
-                backend.submit(cls.map, key, value, callback=collect)
-            backend.shutdown()
-
-            if isinstance(data, pd.DataFrame):
-                data = pd.DataFrame.from_dict(mapped, orient='index').reindex(data.index)
-            elif isinstance(data, pd.Series):
-                data = pd.Series(mapped).reindex(data.index)
-            elif isinstance(data, (list, tuple)):
-                data = type(data)(mapped[i] for i in range(len(mapped)))
-            else:
-                data = mapped
+            data = map(data, cls.map)
 
         if cls.reduce:
             data = cls.reduce(data)

@@ -10,7 +10,10 @@ class ThreadPool(object):
     _threads = []
 
     def __init__(self, n_workers=None):
-        self.n = n_workers or CPU_COUNT
+        # the only reason to use threadpool in Python is IO (because of GIL)
+        # so, we're not really limited with CPU and twice as many threads
+        # is usually fine
+        self.n = n_workers or CPU_COUNT * 2
         self.exec_semaphore = threading.BoundedSemaphore(self.n)
         self.callback_semaphore = threading.Lock()
 

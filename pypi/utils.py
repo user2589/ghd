@@ -669,7 +669,7 @@ def dependencies():
                     "Computing everything from scratch is a lengthy process "
                     "and will likely take a week or so")
 
-    tp = threadpool.ThreadPool(threadpool.CPU_COUNT * 2)
+    tp = threadpool.ThreadPool()
     logger.info("Starting a threadppol with %d workers...", tp.n)
 
     package_names = packages_info().index
