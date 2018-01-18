@@ -6,24 +6,9 @@ import logging
 from django.conf import settings
 from django.core.management.base import BaseCommand
 
-from common import threadpool
-from common import utils
-from scraper import utils as scraper
-
-logging.basicConfig()
-logger = logging.getLogger('ghd')
-
-
-def collect_scraper(package, url):
-    logger.info("Processing %s", package)
-    try:
-        scraper.commits(url)
-    except IOError:
-        logger.info("    %s: repo doesn't exist" % package)
-        return
-    scraper.issues(url)
-    scraper.open_issues(url)
-    scraper.commit_stats(url)
+from common import mapreduce
+from common import utils as common
+import scraper
 
 
 class Command(BaseCommand):
@@ -39,23 +24,22 @@ class Command(BaseCommand):
                             type=int, help='Number of workers to use')
 
     def handle(self, *args, **options):
-        # -v 3: DEBUG, 2: INFO, 1: WARNING, 0: ERROR
-        loglevel = 40 - 10*options['verbosity']
-        logger.setLevel(loglevel)
+        # -v 3: DEBUG, 2: INFO, 1: WARNING (default), 0: ERROR
+        loglevel = 40 - 10 * options['verbosity']
+        logging.basicConfig(level=loglevel)
+        logger = logging.getLogger('ghd')
 
-        import sys
-        sys.setrecursionlimit(20000)  # required by scraper.commits
+        num_workers = min(max(options['workers'], 1), 128)
 
-        # options['workers'] threads, but at least 1 and at most 2 x CPU_COUNT
-        workers = min(max(options['workers'], 1), threadpool.CPU_COUNT * 2)
-        tp = threadpool.ThreadPool(workers)
+        urls = common.package_urls(options['ecosystem'])
 
-        processed = set()
+        def collect_scraper(package, url):
+            logger.info(package)
+            try:
+                scraper.commits(url)
+            except scraper.RepoDoesNotExist:
+                logger.info("    %s: repo doesn't exist" % package)
+                return
+            scraper.issues(url)
 
-        urls = utils.package_urls(options['ecosystem'])
-        for package, url in urls.iteritems():
-            if url not in processed:
-                processed.add(url)
-                tp.submit(collect_scraper, package, url)
-
-        tp.shutdown()
+        mapreduce.map(urls, collect_scraper, num_workers=num_workers)

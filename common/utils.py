@@ -192,10 +192,13 @@ def upstreams(ecosystem):
     deps['deps'] = deps['deps'].map(
         lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
 
-    idx = [d.strftime("%Y-%m")  # start is around 2005
+    # pypi was started around 2000, first meaningful numbers around 2005
+    # npm was started Jan 2010, first meaningful release 2010-11
+    idx = [d.strftime("%Y-%m")
            for d in pd.date_range(deps['date'].min(), 'now', freq="M")]
 
-    df = deps.groupby([deps.index, deps['date'].str[:7]])['dependencies'].last()
+    # for several releases per month, use the last value
+    df = deps.groupby([deps.index, deps['date'].str[:7]])['deps'].last()
     return df.unstack(level=-1).T.reindex(idx).fillna(method='ffill').T
 
 
@@ -295,7 +298,7 @@ def dependencies_centrality(ecosystem, start_date, centrality_type):
 
 
 @fs_cache
-def contributors_centrality(ecosystem, start_date, centrality_type, months, *args):
+def contributors_centrality(ecosystem, centrality_type, months, *args):
     """
     {in|out}_degree are not supported
     eigenvector|katz - didn't converge (increase number of iterations?)
