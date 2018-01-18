@@ -1,18 +1,24 @@
 
 from __future__ import unicode_literals
 
-import logging
-import importlib
-import datetime
-from collections import defaultdict
-
-import pandas as pd
-import numpy as np
 import networkx as nx
+import pandas as pd
+
+from collections import defaultdict
+import logging
 
 from common import decorators as d
-from common import email
+from common import mapreduce
 import scraper
+
+# ecosystems
+import npm
+import pypi
+
+ECOSYSTEMS = {
+    'npm': npm,
+    'pypi': pypi
+}
 
 logger = logging.getLogger("ghd")
 fs_cache = d.fs_cache('common')
@@ -36,14 +42,13 @@ SUPPORTED_METRICS = {
 }
 
 
-def _get_ecosystem(ecosystem):
-    """Returns an imported module for the ecosystem.
-    Basically, an importlib wrapper
-    :param ecosystem: str:{pypi|npm}
-    :return: module
-    """
-    assert ecosystem in SUPPORTED_ECOSYSTEMS, "Ecosystem is not supported"
-    return importlib.import_module(ecosystem)
+def get_ecosystem(ecosystem):
+    """ Return ecosystem obj if supported, raise ValueError otherwiese """
+    if ecosystem not in ECOSYSTEMS:
+        raise ValueError(
+            "Ecosystem %s is not supported. Only (%s) are supported so far" % (
+                ecosystem, ",".join(ECOSYSTEMS.keys())))
+    return ECOSYSTEMS[ecosystem]
 
 
 def package_urls(ecosystem):
