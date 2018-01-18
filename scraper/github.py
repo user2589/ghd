@@ -205,8 +205,7 @@ class GitHubAPI(object):
 
     def repo_commits(self, repo_name, page=None):
         # type: (str, int) -> Iterable[dict]
-        # check repo_name follows pattern %owner/%repo
-        _, _ = repo_name.split("/")
+
         url = "repos/%s/commits" % repo_name
 
         # might throw RepoDoesNotExist
