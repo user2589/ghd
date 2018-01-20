@@ -73,8 +73,15 @@ def package_urls(ecosystem):
     return urls
 
 
+def get_repo_username(url):
+    provider_name, project_url = scraper.parse_url(url)
+    # Assuming urls come from package_urls,
+    # we already know the provider is supported
+    return project_url.split("/", 1)[0]
+
+
 @fs_cache
-def repository_info(ecosystem):
+def user_info(ecosystem):
     """ Return user profile fields
     Originally this method was created to differentiate org from user accounts
 
@@ -82,21 +89,31 @@ def repository_info(ecosystem):
     :return: pd.DataFrame with a bunch of user profile fields (exact set of
             fields depends on repository providers being used)
     """
-    def user_info(project_name, row):
-        logger.info("Processing %s", project_name)
+
+    def get_user_info(url, row):
+        # single column dataframe is used instead of series to simplify
+        # result type conversion
+        username = row["username"]
+        logger.info("Processing %s", username)
         fields = ['created_at', 'login', 'type', 'public_repos',
                   'followers', 'following']
+        provider, _ = scraper.get_provider(url)
         try:
-            data = scraper.user_info(row["url"])
+            data = provider.user_info(username)
         except scraper.RepoDoesNotExist:
-            data = {}
+            return {}
         return {field: data.get(field) for field in fields}
 
     # Since we're going to get many fields out of one, to simplify type
     # conversion it makes sense to convert to pd.DataFrame.
     # by the same reason, user_info() above gets row and not url value
     urls = package_urls(ecosystem)
-    return mapreduce.map(pd.DataFrame(urls).set_index(urls), user_info)
+    urls.index = urls
+    # now usernames have
+    usernames = urls.map(get_repo_username).rename("username").sort_values()
+    usernames = usernames[~usernames.duplicated(keep='first')]
+    # GitHub seems to ban IP if use 32 workers
+    return mapreduce.map(pd.DataFrame(usernames), get_user_info, num_workers=8)
 
 
 def contributors(ecosystem, months=1):

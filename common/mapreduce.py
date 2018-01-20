@@ -25,6 +25,7 @@ def map(data, func, num_workers=None):
 
     for key, value in iterable:
         backend.submit(func, key, value, callback=collect(key))
+
     backend.shutdown()
 
     if isinstance(data, pd.DataFrame):

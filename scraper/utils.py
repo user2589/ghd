@@ -424,9 +424,3 @@ def university_involvement(repo_name):
         {'authored_date': 'count', 'university': 'sum'}
     ).rename(columns={'authored_date': "commits"})
     return (stats["university"] / stats["commits"]).rename("university")
-
-
-def user_info(repo_url):
-    provider, project_url = get_provider(repo_url)
-    user = project_url.split("/", 1)[0]
-    return provider.user_info(user)

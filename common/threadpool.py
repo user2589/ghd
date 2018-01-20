@@ -58,5 +58,12 @@ class ThreadPool(object):
         self._threads.append(t)
 
     def shutdown(self):
+        # cleanup
         for t in self._threads:
             t.join()
+        self._threads = []
+
+        # safety checks - at least once join() did not seem to stop all threads
+        # TODO: check exec semaphore
+        self.callback_semaphore.acquire()
+        self.callback_semaphore.release()
