@@ -245,6 +245,10 @@ class GitHubAPI(object):
         return self.request("users/%s/orgs" % user)
 
     @staticmethod
+    def project_exists(repo_name):
+        return bool(requests.head("https://github.com/" + repo_name))
+
+    @staticmethod
     def activity(repo_name):
         # type: (str) -> dict
         """Unofficial method to get top 100 contributors commits by week"""

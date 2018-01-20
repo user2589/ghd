@@ -63,14 +63,18 @@ def package_urls(ecosystem):
     # PyPI: 91728 -> 86892
     urls = urls[urls.map(urls.value_counts()) == 1]
 
-    def is_supported(url):
-        provider, _ = scraper.parse_url(url)
-        return bool(scraper.PROVIDERS.get(provider))
+    def supported_and_exist(project_name, url):
+        logger.info(project_name)
+        try:
+            provider, project_url = scraper.get_provider(url)
+        except NotImplementedError:
+            return False
+        return provider.project_exists(project_url)
 
-    # remove repositories hosted on yet unsupported resources
-    urls = urls[urls.map(is_supported)]
+    # more than 16 threads make GitHub to choke sometimes even on public urls
+    se = mapreduce.map(urls, supported_and_exist, num_workers=16)
 
-    return urls
+    return urls[se]
 
 
 def get_repo_username(url):
