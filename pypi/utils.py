@@ -231,6 +231,13 @@ class Package(object):
         :param include_backports: bool, whether to include releases smaller in
             version than last stable release
         :return list of string release labels
+
+        >>> len(Package("django").releases()) > 10
+        True
+        >>> len(Package("django").releases()[0])
+        2
+        >>> isinstance(Package("django").releases()[0], tuple)
+        True
         """
         releases = sorted([
             (label, min(f['upload_time'][:10] for f in files))
@@ -382,26 +389,19 @@ class Package(object):
             a3rt-sdk-py["0.0.3"] - folder not matching canonical name
             abofly["1.4.0"] - single file, using non-canonical name
 
-        >>> p = Package("0.0.1")
-        >>> bool(p.top_level_dir("0.0.1"))
+        >>> bool(Package("0.0.1").top_level_dir("0.0.1"))
         True
-        >>> p = Package("0")
-        >>> bool(p.top_level_dir("0.0.0"))
+        >>> bool(Package("0").top_level_dir("0.0.0"))
         True
-        >>> p = Package("02exercicio")
-        >>> bool(p.top_level_dir("1.0.0"))
+        >>> bool(Package("02exercicio").top_level_dir("1.0.0"))
         False
-        >>> p = Package("4suite-xml")
-        >>> bool(p.top_level_dir("1.0.2"))
+        >>> bool(Package("4suite-xml").top_level_dir("1.0.2"))
         True
-        >>> p = Package("0805nexter")
-        >>> bool(p.top_level_dir("1.2.0"))
+        >>> bool(Package("0805nexter").top_level_dir("1.2.0"))
         True
-        >>> p = pypi.Package("a3rt-sdk-py")
-        >>> bool(p.top_level_dir("0.0.3"))
+        >>> bool(Package("a3rt-sdk-py").top_level_dir("0.0.3"))
         True
-        >>> p = pypi.Package("abofly")
-        >>> bool(p.top_level_dir("1.4.0"))
+        >>> bool(Package("abofly").top_level_dir("1.4.0"))
         True
         """
         logger.debug("Package %s ver %s top folder:", self.name, ver)
@@ -477,6 +477,9 @@ class Package(object):
         - full info page
         - package content
         :return url if found, None otherwise
+
+        >>> Package("numpy").url
+        'github.com/numpy/numpy'
         """
         # check home page first
         m = scraper.URL_PATTERN.search(
@@ -497,10 +500,13 @@ class Package(object):
         _, output = _shell("zgrep.sh", pattern, path, raise_on_status=False)
         return output.strip() or None  # output could be empty
 
-
     @d.cached_method
     def dependencies(self, ver=None):
-        """Extract dependencies from either wheels metadata or setup.py"""
+        """Extract dependencies from either wheels metadata or setup.py
+
+        >>> 'numpy' in Package("pandas").dependencies()
+        True
+        """
         ver = ver or self.latest_ver
         logger.debug(
             "Getting dependencies for project %s ver %s", self.name, ver)
@@ -565,6 +571,18 @@ class Package(object):
 
 @fs_cache
 def packages_info():
+    """
+    :return: a pd.Dataframe with columns:
+        - author: author email, str
+        - url: an str suitable for scraper.parse_url() or scraper.get_provider()
+        - license: unstructured str to be used with common.utils.parse_license()
+
+    >>> packages = packages_info()
+    >>> len(packages) > 100000
+    True
+    >>> all(col in packages.columns for col in ('url', 'author', 'license'))
+    True
+    """
     tree = ElementTree.fromstring(Package._request("simple/").content)
     package_names = sorted(a.text.lower() for a in tree.iter('a'))
 
