@@ -21,6 +21,7 @@ def parse(version):
 def compare(ver1, ver2):
     # type: (str, str) -> int
     """Compares two version string, returning {-1|0|1} just as cmp().
+    (-1: ver1 < ver2, 0: ver1==ver2, 1: ver1 > ver2)
     >>> compare_versions("0.1.1", "0.1.2")
     -1
     >>> compare_versions("0.1.2", "0.1.1")

@@ -543,6 +543,8 @@ def packages_info():
         - license: unstructured str to be used with common.utils.parse_license()
 
     >>> packages = packages_info()
+    >>> isinstance(packages, pd.DataFrame)
+    True
     >>> len(packages) > 100000
     True
     >>> all(col in packages.columns for col in ('url', 'author', 'license'))

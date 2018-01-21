@@ -6,9 +6,11 @@ import pandas as pd
 
 from collections import defaultdict
 import logging
+import re
 
 from common import decorators as d
 from common import mapreduce
+from common import versions
 import scraper
 
 # ecosystems
@@ -276,22 +278,44 @@ def connectivity(ecosystem, months=1000):
 
 def upstreams(ecosystem):
     # type: (str) -> pd.DataFrame
-    # ~12s without caching
-    es = get_ecosystem(ecosystem)
-    deps = es.dependencies().sort_values("date")
-    # will drop 101 record out of 4M for npm
-    deps = deps[pd.notnull(deps["date"])]
-    deps['deps'] = deps['deps'].map(
-        lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
+    # ~66s for pypi, doesn't make sense to cache
+
+    def gen():
+        es = get_ecosystem(ecosystem)
+        deps = es.dependencies().sort_values("date")
+        # will drop 101 record out of 4M for npm
+        deps = deps[pd.notnull(deps["date"])]
+        deps['deps'] = deps['deps'].map(
+            lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
+
+        # for several releases per month, use the last value
+        df = deps.groupby([deps.index, deps['date'].str[:7].rename('month')]
+                          ).last().reset_index().sort_values(["name", "month"])
+
+        last_release = ""
+        last_package = ""
+        for _, row in df.iterrows():
+            if row["name"] != last_package:
+                last_release = ""
+                last_package = row["name"]
+            if not re.match("^\d+(\.\d+)*$", row["version"]):
+                continue
+            if versions.compare(row["version"], last_release) < 0:
+                continue
+            last_release = row["version"]
+            yield row
+
+    df = pd.DataFrame(gen(), columns=["name", "month", "deps"])
 
     # pypi was started around 2000, first meaningful numbers around 2005
     # npm was started Jan 2010, first meaningful release 2010-11
+    # no need to cut off anything
     idx = [d.strftime("%Y-%m")
-           for d in pd.date_range(deps['date'].min(), 'now', freq="M")]
+           for d in pd.date_range(df['month'].min(), 'now', freq="M")]
 
-    # for several releases per month, use the last value
-    df = deps.groupby([deps.index, deps['date'].str[:7]])['deps'].last()
-    return df.unstack(level=-1).T.reindex(idx).fillna(method='ffill').T
+    deps = df.set_index(["name", "month"], drop=True)["deps"]
+    # ffill can be dan with axis=1; Transpose here is to reindex
+    return deps.unstack(level=0).reindex(idx).fillna(method='ffill').T
 
 
 def downstreams(uss):
@@ -299,7 +323,7 @@ def downstreams(uss):
     :param uss: either ecosystem (pypi|npm) or an upstreams DataFrame
     :return: pd.DataFrame, df.loc[project, month] = set([*projects])
     """
-    # ~35s without caching
+    # ~25s on PyPI if uss is an upstreams dataframe
     if isinstance(uss, str):
         uss = upstreams(uss)
 
@@ -316,8 +340,24 @@ def downstreams(uss):
 
 
 def cumulative_dependencies(deps):
-    # apply - 150s
-    # owners = package_owners("pypi")
+    """
+   ~160 seconds for pypi upstreams, ?? for downstreams
+   Tests:
+         A      B
+       /  \
+      C    D
+    /  \
+   E    F
+   >>> down = pd.DataFrame({
+        1: [set(['c', 'd']), set(), set(['e', 'f']), set(), set(), set()]},
+            index=['a', 'b', 'c', 'd', 'e', 'f'])
+   >>> len(common.cumulative_dependencies(down).loc['a', 1])
+   5
+   >>> len(common.cumulative_dependencies(down).loc['c', 1])
+   2
+   >>> len(common.cumulative_dependencies(down).loc['b', 1])
+   0
+   """
 
     def gen(dependencies):
         cumulative_upstreams = {}
@@ -427,53 +467,6 @@ def contributors_centrality(ecosystem, centrality_type, months, *args):
     return contras.apply(gen, axis=0).fillna(0)
 
 
-def slice(project_name, url, profile):
-    cs = scraper.commit_stats(url)
-    if not len(cs):  # repo does not exist
-        return None
-
-    df = pd.DataFrame({
-        'age': range(len(cs)),
-        'project': project_name,
-        'dead': None,
-        'last_observation': 0,
-        'commercial': scraper.commercial_involvement(url).reindex(
-            cs.index, fill_value=0),
-        'university': scraper.university_involvement(url).reindex(
-            cs.index, fill_value=0),
-        'org': profile["org"],
-        'license': parse_license(profile["license"]),
-        'commits': cs,
-        'q50': scraper.contributions_quantile(url, 0.5).reindex(
-            cs.index, fill_value=0),
-        'q70': scraper.contributions_quantile(url, 0.7).reindex(
-            cs.index, fill_value=0),
-        'q90': scraper.contributions_quantile(url, 0.9).reindex(
-            cs.index, fill_value=0),
-        'gini': scraper.commit_gini(url).reindex(
-            cs.index),
-        'issues': scraper.new_issues(url).reindex(
-            cs.index, fill_value=0),
-        'non_dev_issues': scraper.non_dev_issue_stats(url).reindex(
-            cs.index, fill_value=0),
-        'submitters': scraper.submitters(url).reindex(
-            cs.index, fill_value=0),
-        'non_dev_submitters': scraper.non_dev_submitters(url).reindex(
-            cs.index, fill_value=0),
-        'downstreams': None,  # FIXME
-        'upstreams': None,  # FIXME
-        't_downstreams': None,
-        't_upstreams': None,
-        'cc_X': None,
-        'dc_X': None
-    })
-
-    # FIXME: df = pd.rolling_mean(window=smoothing, center=False)
-    # FIXME: set last_observation iloc[-1] to 1
-
-    return df
-
-
 def survival_data(ecosystem, smoothing=1):
     """
     :param ecosystem: ("npm"|"pypi")
@@ -487,16 +480,73 @@ def survival_data(ecosystem, smoothing=1):
          contributors centrality,
          dependencies centrality
     """
-    # es = get_ecosystem(ecosystem)
     log = logging.getLogger("ghd.common.survival_data")
 
     def gen():
+        es = get_ecosystem(ecosystem)
+        log.info("Getting package info and user profiles..")
         ui = user_info(ecosystem)
+        pkginfo = es.packages_info()
+
+        log.info("Dependencies counts..")
+        uss = upstreams(ecosystem)  # upstreams, every cell is a set()
+        dss = downstreams(uss)  # downstreams, every cell is a set()
+        usc = count_values(uss)  # upstream counts
+        dsc = count_values(dss)  # downstream counts
+        # transitive counts
+        t_usc = count_values(cumulative_dependencies(uss))
+        t_dsc = count_values(cumulative_dependencies(dss))
+
+        log.info("Dependencies centrality..")
+
 
         for project_name, url in package_urls(ecosystem).items():
             log.info(url)
-            profile = ui.loc[url]
-            df = slice(project_name, url, profile)
+
+            cs = scraper.commit_stats(url)
+            if not len(cs):  # repo does not exist
+                continue
+
+            df = pd.DataFrame({
+                'age': range(len(cs)),
+                'project': project_name,
+                'dead': None,
+                'last_observation': False,
+                'org': ui.loc[url, "org"],
+                'license': parse_license(pkginfo[project_name, "license"]),
+                'commercial': scraper.commercial_involvement(url).reindex(
+                    cs.index, fill_value=0),
+                'university': scraper.university_involvement(url).reindex(
+                    cs.index, fill_value=0),
+                'commits': cs,
+                'q50': scraper.contributions_quantile(url, 0.5).reindex(
+                    cs.index, fill_value=0),
+                'q70': scraper.contributions_quantile(url, 0.7).reindex(
+                    cs.index, fill_value=0),
+                'q90': scraper.contributions_quantile(url, 0.9).reindex(
+                    cs.index, fill_value=0),
+                'gini': scraper.commit_gini(url).reindex(
+                    cs.index),
+                'issues': scraper.new_issues(url).reindex(
+                    cs.index, fill_value=0),
+                'non_dev_issues': scraper.non_dev_issue_stats(url).reindex(
+                    cs.index, fill_value=0),
+                'submitters': scraper.submitters(url).reindex(
+                    cs.index, fill_value=0),
+                'non_dev_submitters': scraper.non_dev_submitters(url).reindex(
+                    cs.index, fill_value=0),
+                'upstreams': usc.loc[project_name, cs.index],
+                'downstreams': dsc.loc[project_name, cs.index],
+                't_downstreams': t_dsc.loc[project_name, cs.index],
+                't_upstreams': t_usc.loc[project_name, cs.index],
+            })
+
+            'cc_X': None,
+            'dc_X': None
+
+            # FIXME: df = pd.rolling_mean(window=smoothing, center=False)
+            # FIXME: set last_observation iloc[-1] to 1
+
             for _, row in df:
                 yield row
 
