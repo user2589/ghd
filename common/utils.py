@@ -29,6 +29,43 @@ START_DATES = {  # default start dates for ecosystem datasets
     'pypi': '2005'
 }
 
+""" This lookup is used by parse_license()
+Since many license strings contain several (often conflicting) licenses,
+the least restrictive license takes precedence.
+
+https://en.wikipedia.org/wiki/Comparison_of_free_and_open-source_software_licenses
+"""
+
+LICENSE_TYPES = (
+    (  # permissive
+        ('apache', 'Apache'),
+        ('isc', 'ISC'),
+        ('mit', 'MIT'),
+        ('bsd', 'BSD'),
+        ('wtf', 'WTFPL'),
+        ('public', 'PD'),
+        ('unlicense', 'PD'),
+    ),
+    (  # somewhat restrictive
+        ('mozilla', 'MPL'),
+        # 'mpl' will also match words like 'simple' and 'example'
+    ),
+    (  # somewhat permissive
+        ('lesser', 'LGPL'),
+        ('lgpl', 'LGPL'),
+    ),
+    (  # strong copyleft
+        ('general public', 'GPL'),
+        ('gpl', 'GPL'),
+        ('affero', 'GPL'),
+        ('CC-BY-SA', 'CC-BY-SA'),
+    ),
+    (  # permissive again
+        ('CC-BY', 'CC'),
+        ('creative', 'CC'),
+    ),
+)
+
 
 def get_ecosystem(ecosystem):
     """ Return ecosystem obj if supported, raise ValueError otherwiese """
@@ -118,6 +155,37 @@ def user_info(ecosystem):
     usernames = usernames[~usernames.duplicated(keep='first')]
     # GitHub seems to ban IP if use 32 workers
     return mapreduce.map(pd.DataFrame(usernames), get_user_info, num_workers=8)
+
+
+def parse_license(license):
+    """ Map raw license string to either a feature, either a class or a numeric
+    measure, like openness.
+    ~1 second for NPM, no need to cache
+    - 3295 unique values in PyPI (lowercase for normalization)
+    + gpl + general public - lgpl - lesser = 575 + 152 - 152 + 45 = 530
+        includes affero
+    + bsd: 358
+    + mit: 320
+    + lgpl + lesser = 152 + 45 = 197
+    + apache: 166
+    + creative: 44
+    + domain: 34
+    + mpl - simpl - mple = 29
+    + zpl: 26
+    + wtf: 22
+    + zlib: 7
+    - isc: just a few, but MANY in NPM
+    - copyright: 763
+        "copyright" is often (50/50) used with "mit"
+    """
+    if license and pd.notnull(license):
+        license = license.lower()
+        # the most permissive ones come first
+        for license_types in LICENSE_TYPES:
+            for token, license_type in license_types:
+                if token in license:
+                    return license_type
+    return None
 
 
 def contributors(ecosystem, months=1):
