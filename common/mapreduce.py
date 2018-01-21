@@ -9,7 +9,9 @@ from common import threadpool
 def map(data, func, num_workers=None):
     backend = threadpool.ThreadPool(n_workers=num_workers)
     iterable = None
-    for method in ('iterrows', 'items'):
+    # pd.Series didn't have .items() until pandas 0.21,
+    # so iteritems for older versions
+    for method in ('iterrows', 'iteritems', 'items'):
         if hasattr(data, method):
             iterable = getattr(data, method)()
             break
