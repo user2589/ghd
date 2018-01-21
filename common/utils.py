@@ -108,13 +108,16 @@ def package_urls(ecosystem):
             return False
         return provider.project_exists(project_url)
 
-    # more than 16 threads make GitHub to choke sometimes even on public urls
+    # more than 16 threads make GitHub to choke even on public urls
     se = mapreduce.map(urls, supported_and_exist, num_workers=16)
 
     return urls[se]
 
 
 def get_repo_username(url):
+    """ This function is used by user_info to extract name of repository owner
+    from its URL. It works so far, but violates abstraction and should be
+    refactored at some point """
     provider_name, project_url = scraper.parse_url(url)
     # Assuming urls come from package_urls,
     # we already know the provider is supported
@@ -153,8 +156,10 @@ def user_info(ecosystem):
     # now usernames have
     usernames = urls.map(get_repo_username).rename("username").sort_values()
     usernames = usernames[~usernames.duplicated(keep='first')]
-    # GitHub seems to ban IP if use 32 workers
-    return mapreduce.map(pd.DataFrame(usernames), get_user_info, num_workers=8)
+    # GitHub seems to ban IP (will get HTTP 403) if use >8 workers
+    ui = mapreduce.map(pd.DataFrame(usernames), get_user_info, num_workers=8)
+    ui["org"] = ui["type"].map(lambda x: x == "Organization")
+    return ui.drop(["type"], axis=1)
 
 
 def parse_license(license):
@@ -267,27 +272,6 @@ def connectivity(ecosystem, months=1000):
             yield pd.Series(conn, index=row.index, name=month)
 
     return pd.DataFrame(gen(), columns=cs.index).T
-
-
-@fs_cache
-def account_data(ecosystem):
-    urls = package_urls(ecosystem)
-    users = set(repo_url.split("/", 1)[0].lower() for repo_url in urls)
-    api = scraper.GitHubAPI()
-
-    def gen():
-        for user in users:
-            try:
-                yield api.user_info(user)
-            except scraper.RepoDoesNotExist:
-                continue
-
-    df = pd.DataFrame(
-        gen(), columns=['id', 'login', 'org', 'type', 'public_repos',
-                        'followers', 'following', 'created_at', 'updated_at'])
-    df['org'] = df['type'].map({"Organization": True, "User": False})
-
-    return df.drop('type', 1).set_index('login')
 
 
 def upstreams(ecosystem):
@@ -443,7 +427,7 @@ def contributors_centrality(ecosystem, centrality_type, months, *args):
     return contras.apply(gen, axis=0).fillna(0)
 
 
-def slice(project_name, url):
+def slice(project_name, url, profile):
     cs = scraper.commit_stats(url)
     if not len(cs):  # repo does not exist
         return None
@@ -457,8 +441,8 @@ def slice(project_name, url):
             cs.index, fill_value=0),
         'university': scraper.university_involvement(url).reindex(
             cs.index, fill_value=0),
-        'org': False,  # FIXME
-        'license': None,  # FIXME
+        'org': profile["org"],
+        'license': parse_license(profile["license"]),
         'commits': cs,
         'q50': scraper.contributions_quantile(url, 0.5).reindex(
             cs.index, fill_value=0),
@@ -507,9 +491,12 @@ def survival_data(ecosystem, smoothing=1):
     log = logging.getLogger("ghd.common.survival_data")
 
     def gen():
+        ui = user_info(ecosystem)
+
         for project_name, url in package_urls(ecosystem).items():
             log.info(url)
-            df = slice(project_name, url)
+            profile = ui.loc[url]
+            df = slice(project_name, url, profile)
             for _, row in df:
                 yield row
 
