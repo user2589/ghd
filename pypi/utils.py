@@ -20,6 +20,7 @@ from xml.etree import ElementTree
 from common import decorators as d
 from common import email
 from common import threadpool
+from common import versions
 import scraper
 
 try:
@@ -35,7 +36,6 @@ if PY3:
     from urllib.request import urlretrieve  # Python3
 else:
     from urllib import urlretrieve  # Python2
-
 
 
 logger = logging.getLogger("ghd.pypi")
@@ -107,41 +107,6 @@ def _shell(cmd, *args, **kwargs):
     if PY3:
         output = output.decode('utf8')
     return status, output
-
-
-def _parse_ver(version):
-    # type: (str) -> list
-    """ Transform version string into comparable list
-    :param version: version string, e.g. 0.11.23rc1
-    :return: list of version chunks, e.g. [0, 11, 23, 'rc1']
-    """
-    chunks = []
-    for chunk in re.findall(r"(\d+|[A-Za-z]\w*)", version):
-        try:
-            chunk = int(chunk)
-        except ValueError:
-            pass
-        chunks.append(chunk)
-    return chunks
-
-
-def compare_versions(ver1, ver2):
-    # type: (str, str) -> int
-    """Compares two version string, returning {-1|0|1} just as cmp().
-    """
-    chunks1 = _parse_ver(str(ver1))
-    chunks2 = _parse_ver(str(ver2))
-    min_len = min(len(chunks1), len(chunks2))
-    for i in range(min_len):
-        if chunks1[i] > chunks2[i]:
-            return 1
-        elif chunks1[i] < chunks2[i]:
-            return -1
-    if len(chunks1) > min_len and isinstance(chunks1[min_len], str):
-        return -1
-    if len(chunks2) > min_len and isinstance(chunks2[min_len], str):
-        return 1
-    return 0
 
 
 def _get_builtins(python_version):
@@ -251,7 +216,7 @@ class Package(object):
         if not include_backports and releases:
             _rel = []
             for label, date in releases:
-                if not _rel or compare_versions(label, _rel[-1][0]) >= 0:
+                if not _rel or versions.compare(label, _rel[-1][0]) >= 0:
                     _rel.append((label, date))
             releases = _rel
         return releases

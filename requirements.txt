@@ -4,7 +4,7 @@
 fabric
 typing
 requests
-pandas
+pandas>=0.21
 numpy
 networkx
 scikit-learn
