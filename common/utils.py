@@ -80,9 +80,14 @@ def get_ecosystem(ecosystem):
 
 @fs_cache
 def package_urls(ecosystem):
-    # type: (str) -> pd.DataFrame
+    # type: (str) -> pd.Series
     """ A shortcut to get list of packages having identified repo URL
     Though it looks trivial, it is a rather important method.
+    >>> urls = package_urls("pypi")
+    >>> isinstance(urls, pd.Series)
+    True
+    >>> len(urls) > 50000
+    True
     """
     es = get_ecosystem(ecosystem)
 
@@ -126,14 +131,21 @@ def get_repo_username(url):
     return project_url.split("/", 1)[0]
 
 
-@fs_cache
+
+@d.fs_cache('common', 2)
 def user_info(ecosystem):
     """ Return user profile fields
     Originally this method was created to differentiate org from user accounts
 
     :param ecosystem: {npm|pypi}
-    :return: pd.DataFrame with a bunch of user profile fields (exact set of
-            fields depends on repository providers being used)
+    :return: pd.DataFrame with columns:
+        - provider_name: {github.com|bitbucket.org|gitlab.com}
+        - login: username on the provider website
+        - created_at: str, ISO timestamp
+        - org: bool, whether it is an organization account (vs personal)
+        - public_repos: int
+        - followers: int
+        - following: int
     """
 
     def get_user_info(url, row):
@@ -195,15 +207,18 @@ def parse_license(license):
     return None
 
 
+@d.memoize
 def contributors(ecosystem, months=1):
     # type: (str) -> pd.DataFrame
-    assert months > 0
     """ Get a historical list of developers contributing to ecosystem projects
     This function takes 7m20s for 54k PyPi projects @months=1, 23m20s@4
     :param ecosystem: {"pypi"|"npm"}
+    :month int, default 1. get contributors for this number of last months
     :return: pd.DataFrame, index is projects, columns are months, cells are
         sets of stirng github usernames
     """
+    assert months > 0
+
     fname = fs_cache.get_cache_fname("contributors", ecosystem, months)
     if fs_cache.expired(fname):
         # fcd = first_contrib_dates(ecosystem).dropna()
@@ -276,10 +291,15 @@ def connectivity(ecosystem, months=1000):
     return pd.DataFrame(gen(), columns=cs.index).T
 
 
+@d.memoize
 def upstreams(ecosystem):
     # type: (str) -> pd.DataFrame
-    # ~66s for pypi, doesn't make sense to cache
+    """ Get a dataframe with upstream dependencies sliced per month
+     ~66s for pypi, doesn't make sense to cache in filesystem
 
+    :param ecosystem: str, {npm|pypi}
+    :return pd.DataFrame, df.loc[package, month] = set([upstreams])
+    """
     def gen():
         es = get_ecosystem(ecosystem)
         deps = es.dependencies().sort_values("date")
@@ -318,14 +338,16 @@ def upstreams(ecosystem):
     return deps.unstack(level=0).reindex(idx).fillna(method='ffill').T
 
 
-def downstreams(uss):
+@d.memoize
+def downstreams(ecosystem):
+    # type: (str) -> pd.DataFrame
     """ Basically, reversed upstreams
-    :param uss: either ecosystem (pypi|npm) or an upstreams DataFrame
+    +25s to upstreams execution on PyPI dataset
+
+    :param ecosystem: str, {pypi|npm}
     :return: pd.DataFrame, df.loc[project, month] = set([*projects])
     """
-    # ~25s on PyPI if uss is an upstreams dataframe
-    if isinstance(uss, str):
-        uss = upstreams(uss)
+    uss = upstreams(ecosystem)
 
     def gen(row):
         s = defaultdict(set)
@@ -351,14 +373,13 @@ def cumulative_dependencies(deps):
    >>> down = pd.DataFrame({
         1: [set(['c', 'd']), set(), set(['e', 'f']), set(), set(), set()]},
             index=['a', 'b', 'c', 'd', 'e', 'f'])
-   >>> len(common.cumulative_dependencies(down).loc['a', 1])
+   >>> len(cumulative_dependencies(down).loc['a', 1])
    5
-   >>> len(common.cumulative_dependencies(down).loc['c', 1])
+   >>> len(cumulative_dependencies(down).loc['c', 1])
    2
-   >>> len(common.cumulative_dependencies(down).loc['b', 1])
+   >>> len(cumulative_dependencies(down).loc['b', 1])
    0
    """
-
     def gen(dependencies):
         cumulative_upstreams = {}
 
@@ -381,6 +402,13 @@ def count_values(df):
     # type: (pd.DataFrame) -> pd.DataFrame
     """ Count number of values in lists/sets
     It is initially introduced to count dependencies
+    >>> c = count_values(pd.DataFrame({1:[set(), set(range(4)), [1,2,3,2,4]]}))
+    >>> c.loc[0, 1]
+    0
+    >>> c.loc[1, 1]
+    4
+    >>> c.loc[2, 1]
+    5
     """
     # takes around 20s for full pypi history
 
@@ -393,26 +421,33 @@ def count_values(df):
         return df.apply(count)
 
 
-def centrality(how, graph, *args, **kwargs):
+def centrality(how, graph):
     # type: (str, nx.Graph) -> dict
+    """ A wrapper for networkx centrality methods to allow for parametrization
+
+    :param how: str, networkx centrality method
+    :param graph: nx.Graph or nx.DiGraph
+    :return: dict, {node_label: centrality_value}
+    """
     if not how.endswith("_centrality") and how not in \
             ('communicability', 'communicability_exp', 'estrada_index',
              'communicability_centrality_exp', "subgraph_centrality_exp",
              'dispersion', 'betweenness_centrality_subset', 'edge_load'):
         how += "_centrality"
     assert hasattr(nx, how), "Unknown centrality measure: " + how
-    return getattr(nx, how)(graph, *args, **kwargs)
+    return getattr(nx, how)(graph)
 
 
 @fs_cache
-def dependencies_centrality(ecosystem, start_date, centrality_type):
+def dependencies_centrality(ecosystem, centrality_type):
     """
     [edge_]current_flow_closeness is not defined for digraphs
     current_flow_betweenness - didn't try
     communicability*
     estrada_index
     """
-    uss = upstreams(ecosystem).loc[:, start_date:]
+    logger.info("Collecting dependencies data..")
+    uss = upstreams(ecosystem)
 
     def gen(stub):
         # stub = uss column
@@ -447,7 +482,7 @@ def contributors_centrality(ecosystem, centrality_type, months, *args):
         logger.info("Processing %s", stub.name)
         projects = defaultdict(set)  # projects[contributor] = set(projects)
 
-        for pkg, cs in stub.iteritems():
+        for pkg, cs in stub.items():
             if not cs or pd.isnull(cs):
                 continue
             for c in cs:
@@ -456,7 +491,7 @@ def contributors_centrality(ecosystem, centrality_type, months, *args):
         projects["-"] = set()
         g = nx.Graph()
 
-        for pkg, cs in stub.iteritems():
+        for pkg, cs in stub.items():
             for c in cs:
                 for p in projects[c]:
                     if p != pkg:
