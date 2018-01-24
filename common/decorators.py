@@ -20,6 +20,7 @@ def mkdir(*args):
             os.mkdir(path)
     return path
 
+
 DEFAULT_EXPIRY = 3600 * 24 * 30 * 3
 DATASET_PATH = getattr(settings, 'DATASET_PATH', None) or \
     os.path.join(os.path.dirname(__file__), '..', '.cache')
@@ -78,7 +79,7 @@ class fs_cache(object):
             else:
                 raise ValueError("Unsupported result type (pd.DataFrame or "
                                  "pd.Series expected, got %s)" % type(res))
-            df.to_csv(cache_fpath, float_format="%.2g", encoding="utf-8")
+            df.to_csv(cache_fpath, float_format="%g", encoding="utf-8")
             return res
         return wrapper
 
