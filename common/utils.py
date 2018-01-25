@@ -134,15 +134,44 @@ def package_urls(ecosystem):
     return urls[se]
 
 
-def get_repo_username(url):
-    """ This function is used by user_info to extract name of repository owner
+def get_repo_usernames(urls):
+    # type: (pd.Series) -> pd.DataFrame
+    """
+    This function is used by user_info to extract name of repository owner
     from its URL. It works so far, but violates abstraction and should be
-    refactored at some point """
-    provider_name, project_url = scraper.parse_url(url)
-    # Assuming urls come from package_urls,
-    # we already know the provider is supported
-    return project_url.split("/", 1)[0]
+    refactored at some point
+    :param: pd.Series with urls, e.g. github.com/pandas-dev/pandas
+    :return pd.Dataframe with columns
+        index: url index, package name if package_urls() is used as inputs
+        - provider_name: str, {github.com|bitbucket.org|gitlab.com}
+        - login: str, provider-specific login
 
+    >>> urls = s = pd.Series(
+        ["github.com/pandas-dev/pandas",
+        "github.com/user2589/ghd",
+        "github.com/dkhsd/asdf"])
+    >>> usernames = get_repo_usernames(urls)
+    >>> isinstance(usernames, pd.DataFrame)
+    True
+    >>> len(urls) == len(usernames)
+    True
+    >>> all(col in usernames.columns for col in ('provider_name', 'login'))
+    True
+    >>> usernames.loc["pandas", "provider_name"]
+    'github.com'
+    >>> usernames.loc['pandas', 'login']
+    'pandas-dev'
+    """
+    def gen():
+        for _, url in urls.items():
+            provider_name, project_url = scraper.parse_url(url)
+            # Assuming urls come from package_urls,
+            # we already know the provider is supported
+            yield {
+                'provider_name': provider_name,
+                'login': project_url.split("/", 1)[0]
+            }
+    return pd.DataFrame(gen(), index=urls.index)
 
 
 @d.fs_cache('common', 2)
@@ -161,32 +190,37 @@ def user_info(ecosystem):
         - following: int
     """
 
-    def get_user_info(url, row):
+    def get_user_info(_, row):
         # single column dataframe is used instead of series to simplify
         # result type conversion
-        username = row["username"]
+        username = row["login"]
         logger.info("Processing %s", username)
         fields = ['created_at', 'login', 'type', 'public_repos',
                   'followers', 'following']
-        provider, _ = scraper.get_provider(url)
+        provider_name, _ = scraper.parse_url(row["url"])
+        provider, _ = scraper.get_provider(row["url"])
         try:
             data = provider.user_info(username)
         except scraper.RepoDoesNotExist:
             return {}
-        return {field: data.get(field) for field in fields}
+        res = {field: data.get(field) for field in fields}
+        res["provider_name"] = provider_name
+        return res
 
     # Since we're going to get many fields out of one, to simplify type
     # conversion it makes sense to convert to pd.DataFrame.
     # by the same reason, user_info() above gets row and not url value
     urls = package_urls(ecosystem)
-    urls.index = urls
-    # now usernames have
-    usernames = urls.map(get_repo_username).rename("username").sort_values()
-    usernames = usernames[~usernames.duplicated(keep='first')]
+    urls.index = urls  # will need it in get_user_info
+
+    # it's going to be a pd.DataFrame(provider_name, login, url)
+    usernames = get_repo_usernames(urls).reset_index()
+    usernames = usernames.groupby(["provider_name", "login"]).first()
     # GitHub seems to ban IP (will get HTTP 403) if use >8 workers
-    ui = mapreduce.map(pd.DataFrame(usernames), get_user_info, num_workers=8)
-    ui["org"] = ui["type"].map(lambda x: x == "Organization")
-    return ui.drop(["type"], axis=1)
+    ui = mapreduce.map(usernames.reset_index(), get_user_info, num_workers=8)
+    # TODO: move to provider
+    ui["org"] = ui["type"].map({"Organization": True, "User": False})
+    return ui.drop(["type"], axis=1).set_index("login", drop=True)
 
 
 def parse_license(license):
