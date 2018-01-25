@@ -7,11 +7,8 @@ requests
 pandas>=0.21
 numpy
 networkx
-scikit-learn
 matplotlib
 # seaborn
-# dask
-# distributed
 
 # ===========================
 # STACKOVERFLOW

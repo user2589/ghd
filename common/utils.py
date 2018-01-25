@@ -90,8 +90,24 @@ def package_urls(ecosystem):
     True
     """
     es = get_ecosystem(ecosystem)
+    urls = es.packages_info()["url"].dropna()
 
-    urls = es.packages_info()["url"]
+    def supported(url):
+        try:
+            scraper.get_provider(url)
+        except NotImplementedError:
+            return False
+        return True
+
+    urls = urls[urls.map(supported)]
+
+    # this part normalizes URLs, e.g. by removing trailing .git from GitHub URLs
+    def normalize(url):
+        provider, project_url = scraper.get_provider(url)
+        return provider.canonical_url(project_url)
+
+    urls = urls.map(normalize)
+
     # this is necessary to get rid of false URLS, such as:
     # - meta-urls, e.g.
     #       http://github.com/npm/deprecate-holder.git
@@ -107,16 +123,13 @@ def package_urls(ecosystem):
     # PyPI: 91728 -> 86892
     urls = urls[urls.map(urls.value_counts()) == 1]
 
-    def supported_and_exist(project_name, url):
+    def exists(project_name, url):
         logger.info(project_name)
-        try:
-            provider, project_url = scraper.get_provider(url)
-        except NotImplementedError:
-            return False
+        provider, project_url = scraper.get_provider(url)
         return provider.project_exists(project_url)
 
     # more than 16 threads make GitHub to choke even on public urls
-    se = mapreduce.map(urls, supported_and_exist, num_workers=16)
+    se = mapreduce.map(urls, exists, num_workers=16)
 
     return urls[se]
 

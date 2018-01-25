@@ -4,7 +4,6 @@ from __future__ import print_function
 import numpy as np
 import pandas as pd
 
-from functools import wraps
 import logging
 import re
 
@@ -200,7 +199,7 @@ def commit_user_stats(repo_name):
     # check for null and empty string is required because of file caching.
     # commits scraped immediately will have empty string, but after save/load
     # it will be converted to NaN by pandas
-    min_date = stats.loc[pd.isnull(stats["parents"]) | (stats["parents"] == ""),
+    min_date = stats.loc[pd.isnull(stats["parents"]) | stats["parents"].astype(bool),
                          "authored_date"].min()
     stats = stats[stats["authored_date"] >= min_date]
     stats['author'] = stats['author'].fillna(DEFAULT_USERNAME)

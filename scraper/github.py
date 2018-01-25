@@ -249,6 +249,30 @@ class GitHubAPI(object):
         return bool(requests.head("https://github.com/" + repo_name))
 
     @staticmethod
+    def canonical_url(project_url):
+        # type: (str) -> str
+        """ Normalize URL
+        :param project_url: str, user_name/repo_name
+        :return: github.com/user_name/repo_name with both names normalized
+
+        >>> GitHubAPI.canonical_url("pandas-DEV/pandas")
+        'github.com/pandas-dev/pandas'
+        >>> GitHubAPI.canonical_url("http://github.com/django/django.git")
+        'github.com/django/django'
+        >>> GitHubAPI.canonical_url("https://github.com/A/B/")
+        'github.com/a/b/'
+        """
+        url = project_url.lower()
+        for chunk in ("httpp://", "https://", "github.com"):
+            if url.startswith(chunk):
+                url = url[len(chunk):]
+        if url.endswith("/"):
+            url = url[:-1]
+        while url.endswith(".git"):
+            url = url[:-4]
+        return "github.com/" + url
+
+    @staticmethod
     def activity(repo_name):
         # type: (str) -> dict
         """Unofficial method to get top 100 contributors commits by week"""
