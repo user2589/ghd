@@ -1,7 +1,8 @@
 
-import threading
 import logging
 import multiprocessing
+import threading
+import time
 
 CPU_COUNT = multiprocessing.cpu_count()
 
@@ -64,6 +65,8 @@ class ThreadPool(object):
         self._threads = []
 
         # safety checks - at least once join() did not seem to stop all threads
-        # TODO: check exec semaphore
         self.callback_semaphore.acquire()
         self.callback_semaphore.release()
+
+        # TODO: check exec semaphore instead
+        time.sleep(10)

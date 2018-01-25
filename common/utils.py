@@ -216,8 +216,8 @@ def user_info(ecosystem):
     # it's going to be a pd.DataFrame(provider_name, login, url)
     usernames = get_repo_usernames(urls).reset_index()
     usernames = usernames.groupby(["provider_name", "login"]).first()
-    # GitHub seems to ban IP (will get HTTP 403) if use >8 workers
-    ui = mapreduce.map(usernames.reset_index(), get_user_info, num_workers=8)
+    # GitHub seems to ban IP (will get HTTP 403) if use 8 workers
+    ui = mapreduce.map(usernames.reset_index(), get_user_info, num_workers=6)
     # TODO: move to provider
     ui["org"] = ui["type"].map({"Organization": True, "User": False})
     return ui.drop(["type"], axis=1).set_index("login", drop=True)

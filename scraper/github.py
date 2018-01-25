@@ -252,6 +252,10 @@ class GitHubAPI(object):
     def canonical_url(project_url):
         # type: (str) -> str
         """ Normalize URL
+        - remove trailing .git  (IMPORTANT)
+        - lowercase (API is insensitive to case, but will allow to deduplicate)
+        - prepend "github.com"
+
         :param project_url: str, user_name/repo_name
         :return: github.com/user_name/repo_name with both names normalized
 
