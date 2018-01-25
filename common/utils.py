@@ -25,8 +25,8 @@ ECOSYSTEMS = {
 logger = logging.getLogger("ghd")
 fs_cache = d.fs_cache('common')
 
-# TODO: deprecate START_DATES
-START_DATES = {  # default start dates for ecosystem datasets
+# default start dates for ecosystem datasets. It is used for sanity checks
+START_DATES = {
     'npm': '2010',
     'pypi': '2005'
 }
@@ -276,10 +276,13 @@ def contributors(ecosystem, months=1):
         def gen():
             for package, repo in package_urls(ecosystem).items():
                 logger.info("Processing %s: %s", package, repo)
-                s = scraper.commit_user_stats(repo).reset_index()[
-                    ['authored_date', 'author']].groupby('authored_date').agg(
-                    lambda df: set(df['author']))['author'].rename(
-                    package).reindex(columns)
+                try:
+                    s = scraper.commit_user_stats(repo).reset_index()[
+                        ['authored_date', 'author']].groupby('authored_date').agg(
+                        lambda df: set(df['author']))['author'].rename(
+                        package).reindex(columns)
+                except scraper.RepoDoesNotExist:
+                    continue
                 if months > 1:
                     s = pd.Series(
                         (set().union(*[c for c in s[max(0, i-months+1):i+1]
@@ -352,6 +355,9 @@ def upstreams(ecosystem):
         deps = es.dependencies().sort_values("date")
         # will drop 101 record out of 4M for npm
         deps = deps[pd.notnull(deps["date"])]
+        # otherwise, there is a package in NPM dated 1970 which increases
+        # dataframe size manyfold
+        deps = deps[deps["date"] > START_DATES[ecosystem]]
         deps['deps'] = deps['deps'].map(
             lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
 
@@ -512,7 +518,7 @@ def dependencies_centrality(ecosystem, centrality_type):
 
 
 @fs_cache
-def contributors_centrality(ecosystem, centrality_type, months, *args):
+def contributors_centrality(ecosystem, centrality_type):
     """
     {in|out}_degree are not supported
     eigenvector|katz - didn't converge (increase number of iterations?)
@@ -522,8 +528,11 @@ def contributors_centrality(ecosystem, centrality_type, months, *args):
     subgraph - unknown (update nx?)
     local_reaching - requires v
     """
-    contras = contributors(ecosystem, months)
+    logger.info("Getting contributors..")
+    contras = contributors(ecosystem)
     # {in|out}_degree is not defined for undirected graphs
+
+    logger.info("Processing contributors centrality by month..")
 
     def gen(stub):
         logger.info("Processing %s", stub.name)
@@ -543,7 +552,7 @@ def contributors_centrality(ecosystem, centrality_type, months, *args):
                 for p in projects[c]:
                     if p != pkg:
                         g.add_edge(pkg, p)
-        return pd.Series(centrality(centrality_type, g, *args),
+        return pd.Series(centrality(centrality_type, g),
                          index=stub.index)
 
     return contras.apply(gen, axis=0).fillna(0)
@@ -562,53 +571,69 @@ def survival_data(ecosystem, smoothing=1):
          contributors centrality,
          dependencies centrality
     """
-    log = logging.getLogger("ghd.common.survival_data")
+    log = logging.getLogger("ghd.survival")
+    death_window = 12
+    death_threshold = 1.0
 
     def gen():
         es = get_ecosystem(ecosystem)
+        urls = package_urls(ecosystem)[:20]
         log.info("Getting package info and user profiles..")
+        usernames = get_repo_usernames(urls)
         ui = user_info(ecosystem)
         pkginfo = es.packages_info()
 
-        log.info("Dependencies counts..")
-        uss = upstreams(ecosystem)  # upstreams, every cell is a set()
-        dss = downstreams(uss)  # downstreams, every cell is a set()
-        usc = count_values(uss)  # upstream counts
-        dsc = count_values(dss)  # downstream counts
-        # transitive counts
-        t_usc = count_values(cumulative_dependencies(uss))
-        t_dsc = count_values(cumulative_dependencies(dss))
+        # FIXME: uncomment when done with testing
+        # log.info("Dependencies counts..")
+        # uss = upstreams(ecosystem)  # upstreams, every cell is a set()
+        # dss = downstreams(uss)  # downstreams, every cell is a set()
+        # usc = count_values(uss)  # upstream counts
+        # dsc = count_values(dss)  # downstream counts
+        # # transitive counts
+        # t_usc = count_values(cumulative_dependencies(uss))
+        # t_dsc = count_values(cumulative_dependencies(dss))
 
         log.info("Dependencies centrality..")
+        dc_closeness = dependencies_centrality("pypi", "closeness")
+        dc_degree = dependencies_centrality("pypi", "in_degree")
+        dc_closeness = dependencies_centrality("pypi", "closeness")
 
+        log.info("Collecting dataset..")
 
-        for project_name, url in package_urls(ecosystem).items():
-            log.info(url)
+        for project_name, url in urls.items():
+            log.info(project_name)
 
-            cs = scraper.commit_stats(url)
-            if not len(cs):  # repo does not exist
+            try:
+                cs = scraper.commit_stats(url)
+            except scraper.RepoDoesNotExist:
+                # even though package_url checks for repos existance, it could
+                # be deleted later
                 continue
 
+            if not len(cs):  # repo does not exist
+                continue
+            uname = usernames.loc[project_name]
             df = pd.DataFrame({
                 'age': range(len(cs)),
                 'project': project_name,
-                'dead': None,
-                'last_observation': False,
-                'org': ui.loc[url, "org"],
-                'license': parse_license(pkginfo[project_name, "license"]),
+                'dead': 1,
+                'last_observation': 0,
+                'org': ui.loc[uname["provider_name"], uname["login"]]["org"][0],
+                'license': parse_license(pkginfo.loc[project_name, "license"]),
                 'commercial': scraper.commercial_involvement(url).reindex(
                     cs.index, fill_value=0),
                 'university': scraper.university_involvement(url).reindex(
                     cs.index, fill_value=0),
                 'commits': cs,
-                'q50': scraper.contributions_quantile(url, 0.5).reindex(
+                'contributors': scraper.commit_users(url).reindex(
                     cs.index, fill_value=0),
-                'q70': scraper.contributions_quantile(url, 0.7).reindex(
-                    cs.index, fill_value=0),
+                # 'q50': scraper.contributions_quantile(url, 0.5).reindex(
+                #     cs.index, fill_value=0),
+                # 'q70': scraper.contributions_quantile(url, 0.7).reindex(
+                #     cs.index, fill_value=0),
                 'q90': scraper.contributions_quantile(url, 0.9).reindex(
                     cs.index, fill_value=0),
-                'gini': scraper.commit_gini(url).reindex(
-                    cs.index),
+                # 'gini': scraper.commit_gini(url).reindex(cs.index),
                 'issues': scraper.new_issues(url).reindex(
                     cs.index, fill_value=0),
                 'non_dev_issues': scraper.non_dev_issue_stats(url).reindex(
@@ -617,19 +642,28 @@ def survival_data(ecosystem, smoothing=1):
                     cs.index, fill_value=0),
                 'non_dev_submitters': scraper.non_dev_submitters(url).reindex(
                     cs.index, fill_value=0),
-                'upstreams': usc.loc[project_name, cs.index],
-                'downstreams': dsc.loc[project_name, cs.index],
-                't_downstreams': t_dsc.loc[project_name, cs.index],
-                't_upstreams': t_usc.loc[project_name, cs.index],
+                # 'upstreams': usc.loc[project_name, cs.index],
+                # 'downstreams': dsc.loc[project_name, cs.index],
+                # 't_downstreams': t_dsc.loc[project_name, cs.index],
+                # 't_upstreams': t_usc.loc[project_name, cs.index],
             })
 
-            'cc_X': None,
-            'dc_X': None
+            dead = (cs[::-1].rolling(window=death_window).mean(
+                )[:death_window - 2:-1] < death_threshold).shift(-1).fillna(method='ffill')
+            df['dead'] = dead
+            death = dead[dead].index.min()
+            if death and pd.notnull(death):
+                df = df.loc[:death]
 
-            # FIXME: df = pd.rolling_mean(window=smoothing, center=False)
-            # FIXME: set last_observation iloc[-1] to 1
+            # FIXME: centrality
+            # 'cc_X': None,
+            # 'dc_X': None
 
-            for _, row in df:
+            df = df.rolling(window=smoothing, min_periods=1).mean()
+            df.iloc[-1, df.columns.get_loc("last_observation")] = 1
+            df = df[((df["age"] % smoothing) == 0) | df["last_observation"]]
+
+            for _, row in df.iterrows():
                 yield row
 
     return pd.DataFrame(gen()).reset_index(drop=True)
