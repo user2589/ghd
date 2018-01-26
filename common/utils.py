@@ -128,8 +128,10 @@ def package_urls(ecosystem):
         provider, project_url = scraper.get_provider(url)
         return provider.project_exists(project_url)
 
-    # more than 16 threads make GitHub to choke even on public urls
-    se = mapreduce.map(urls, exists, num_workers=16)
+    # - more than 16 threads make GitHub to choke even on public urls
+    # - some malformed URLs will result in NaN (e.g. NPM abwa-gulp and
+    #       barco-jobs), so need to fillna()
+    se = mapreduce.map(urls, exists, num_workers=16).fillna(False)
 
     return urls[se]
 
@@ -360,6 +362,8 @@ def upstreams(ecosystem):
         deps = deps[deps["date"] > START_DATES[ecosystem]]
         deps['deps'] = deps['deps'].map(
             lambda x: set(x.split(",")) if x and pd.notnull(x) else set())
+        # remove alpha releases, 835K-> 744K (PyPI)
+        deps = deps[~(deps["version"].map(versions.is_alpha))]
 
         # for several releases per month, use the last value
         df = deps.groupby([deps.index, deps['date'].str[:7].rename('month')]
@@ -371,8 +375,7 @@ def upstreams(ecosystem):
             if row["name"] != last_package:
                 last_release = ""
                 last_package = row["name"]
-            if not re.match("^\d+(\.\d+)*$", row["version"]):
-                continue
+            # remove backports
             if versions.compare(row["version"], last_release) < 0:
                 continue
             last_release = row["version"]
@@ -383,8 +386,8 @@ def upstreams(ecosystem):
     # pypi was started around 2000, first meaningful numbers around 2005
     # npm was started Jan 2010, first meaningful release 2010-11
     # no need to cut off anything
-    idx = [d.strftime("%Y-%m")
-           for d in pd.date_range(df['month'].min(), 'now', freq="M")]
+    idx = [dt.strftime("%Y-%m")
+           for dt in pd.date_range(df['month'].min(), 'now', freq="M")]
 
     deps = df.set_index(["name", "month"], drop=True)["deps"]
     # ffill can be dan with axis=1; Transpose here is to reindex
@@ -412,6 +415,49 @@ def downstreams(ecosystem):
         return pd.Series(s, name=row.name, index=row.index)
 
     return uss.apply(gen, axis=0)
+
+
+def backporting(ecosystem, window=12):
+    """
+    In many cases "backporting" is caused by labeling errors so don't expect
+    16s for PyPI
+
+    How to test (face validity):
+    pandas doesn't do backporting
+    numpy did once (1.7.2, 2013-12-31)
+        once they mislabeled a release (1.10.3 after 1.10.4, 2016-04-20)
+    django does backport all the time (they always support at least couple
+        most recent versions)
+
+    :param ecosystem: str {npm|pypi}
+    :param window: number of month to consider exercising backporting since
+        observed
+    :return: pd.Dataframe, df.loc[package, month] = <bool>
+    """
+    es = get_ecosystem(ecosystem)
+    deps = es.dependencies().reset_index().sort_values(["name", "date"])
+    deps = deps[~(deps["version"].map(versions.is_alpha))]
+    deps["prev_version"] = deps["version"].shift(1)
+    deps["prev_name"] = deps["name"].shift(1)
+    deps = deps[deps["name"] == deps["prev_name"]]
+    deps = deps[["name", "version", "prev_version", "date"]]
+    deps["cmp"] = deps.apply(
+            lambda row: versions.compare(row["version"], row["prev_version"]),
+            axis=1)
+    backported = deps.loc[deps["cmp"] < 0, ["name", "date"]]
+    backported["date"] = backported["date"].str[:7]
+    backported["backported"] = 1
+
+    idx = [dt.strftime("%Y-%m")
+           for dt in pd.date_range(backported['date'].min(), 'now', freq="M")]
+
+    backported = backported.set_index(["name", "date"], drop=True)
+    backported = backported.groupby(["name", "date"]).first()
+    df = backported.unstack(level=0).reindex(idx).fillna(0)
+    # level_0 is an artifact of multiindex
+    df = df.T.reset_index().set_index("name", drop=True).drop("level_0", axis=1)
+    df = df.rolling(window=window, min_periods=1, axis=1).mean()
+    return df.reindex(deps["name"].unique(), fill_value=0).astype(bool)
 
 
 def cumulative_dependencies(deps):
