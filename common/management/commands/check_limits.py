@@ -22,7 +22,8 @@ class Command(BaseCommand):
                      "core_renews_in", "search_limit", "search_remaining",
                      "search_renews_in", "key"))
         for token in api.tokens:
-            user = token.user
+            # if limit is exhausted there is no way to get username
+            user = token.user or "<unknown%d>" % len(df)
             values = {'key': token.token}
             token._check_limits()
 

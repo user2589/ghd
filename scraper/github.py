@@ -51,14 +51,23 @@ class GitHubAPIToken(object):
     @property
     def user(self):
         if self._user is None:
-            r = self.request('user')
-            self._user = r.json().get('login', '')
+            try:
+                r = self.request('user')
+            except TokenNotReady:
+                pass
+            else:
+                self._user = r.json().get('login', '')
         return self._user
 
     def _check_limits(self):
         # regular limits will be updaated automatically upon request
         # we only need to take care about search limit
-        s = self.request('rate_limit').json()['resources']['search']
+        try:
+            s = self.request('rate_limit').json()['resources']['search']
+        except TokenNotReady:
+            # self.request updated core limits already; search limits unknown
+            s = {'remaining': None, 'reset': None, 'limit': None}
+
         self.limit['search'] = {
             'remaining': s['remaining'],
             'reset_time': s['reset'],
