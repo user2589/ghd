@@ -59,44 +59,6 @@ class TestDecorators(unittest.TestCase):
         decorator.invalidate(cdataframe)
 
 
-class TestUtils(unittest.TestCase):
-
-    def test_upstream(self):
-        month = "2017-05"
-        pkg = "django"
-        deps = common.upstreams("pypi")
-        self.assertIn(pkg, deps.index)
-        self.assertIn(month, deps.columns)
-
-        django = deps.loc[pkg]
-        self.assertSetEqual(django[month], {'pytz'})
-
-    def test_downstream(self):
-        month = "2017-05"
-        pkg = "django"
-        deps = common.downstreams("pypi")
-        self.assertIn(pkg, deps.index)
-        self.assertIn(month, deps.columns)
-
-        django = deps.loc[pkg]
-        self.assertGreater(len(django[month]), 3000)
-
-    def test_count_dependencies(self):
-        month = "2017-05"
-        deps = common.downstreams("pypi")
-        counts = common.count_dependencies(deps)
-        self.assertEqual(counts.loc["django", month], 3247)
-        self.assertEqual(counts.loc["six", month], 4425)
-
-    def test_cumulative_dependencies(self):
-        month = "2017-05"
-        deps = common.downstreams("pypi")
-        cumulative = common.cumulative_dependencies(deps)
-        counts = common.count_dependencies(cumulative)
-        self.assertEqual(counts.loc["django", month], 3796)
-        self.assertEqual(counts.loc["six", month], 19995)
-
-
 class TestEmails(unittest.TestCase):
 
     def test_clean_email(self):

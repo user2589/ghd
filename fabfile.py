@@ -13,6 +13,7 @@ fab.env.hosts = settings.DEPLOY_HOSTS
 def test():
     with fab.settings(warn_only=True):
         fab.local("python -m unittest common.test")
+        fab.local("python -m doctest -v common/utils.py")
         fab.local("python -m doctest -v pypi/utils.py")
         fab.local("python -m unittest scraper.test")
 

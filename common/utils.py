@@ -6,7 +6,6 @@ import pandas as pd
 
 from collections import defaultdict
 import logging
-import re
 
 from common import decorators as d
 from common import mapreduce
@@ -45,7 +44,6 @@ LICENSE_TYPES = (
         ('mit', 'MIT'),
         ('bsd', 'BSD'),
         ('wtf', 'WTFPL'),
-        ('public', 'PD'),
         ('unlicense', 'PD'),
     ),
     (  # somewhat restrictive
@@ -63,6 +61,7 @@ LICENSE_TYPES = (
         ('CC-BY-SA', 'CC-BY-SA'),
     ),
     (  # permissive again
+        ('public', 'PD'),
         ('CC-BY', 'CC'),
         ('creative', 'CC'),
     ),
@@ -70,7 +69,7 @@ LICENSE_TYPES = (
 
 
 def get_ecosystem(ecosystem):
-    """ Return ecosystem obj if supported, raise ValueError otherwiese """
+    """ Return ecosystem module if supported, raise ValueError otherwise """
     if ecosystem not in ECOSYSTEMS:
         raise ValueError(
             "Ecosystem %s is not supported. Only (%s) are supported so far" % (
@@ -86,7 +85,9 @@ def package_urls(ecosystem):
     >>> urls = package_urls("pypi")
     >>> isinstance(urls, pd.Series)
     True
-    >>> len(urls) > 50000
+    >>> 50000 < len(urls) < 200000
+    True
+    >>> "django" in urls
     True
     """
     es = get_ecosystem(ecosystem)
@@ -178,11 +179,13 @@ def get_repo_usernames(urls):
 
 @d.fs_cache('common', 2)
 def user_info(ecosystem):
+    # type: (str) -> pd.DataFrame
     """ Return user profile fields
     Originally this method was created to differentiate org from user accounts
 
     :param ecosystem: {npm|pypi}
-    :return: pd.DataFrame with columns:
+    :return: pd.DataFrame:
+        Index: (provider, username)
         - provider_name: {github.com|bitbucket.org|gitlab.com}
         - login: username on the provider website
         - created_at: str, ISO timestamp
@@ -190,6 +193,17 @@ def user_info(ecosystem):
         - public_repos: int
         - followers: int
         - following: int
+    >>> ui = user_info("pypi")
+    >>> isinstance(ui, pd.DataFrame)
+    True
+    >>> 30000 < len(ui) < 200000  # 34500
+    True
+    >>> ui.loc[("github.com", "pandas-dev"), "org"][0]
+    True
+    >>> ui.loc[("github.com", "django"), "org"][0]
+    True
+    >>> ui.loc[("github.com", "user2589"), "org"][0]
+    False
     """
 
     def get_user_info(_, row):
@@ -222,12 +236,17 @@ def user_info(ecosystem):
     ui = mapreduce.map(usernames.reset_index(), get_user_info, num_workers=6)
     # TODO: move to provider
     ui["org"] = ui["type"].map({"Organization": True, "User": False})
-    return ui.drop(["type"], axis=1).set_index("login", drop=True)
+    return ui.drop(["type"], axis=1).set_index(
+        ["provider_name", "login"], drop=True)
 
 
 def parse_license(license):
-    """ Map raw license string to either a feature, either a class or a numeric
-    measure, like openness.
+    """ Standardize raw license string.
+    - If two licenses specified, more permissive prevails.
+    :param license: raw string
+    :return str, {Apache|ISC|MIT|BSD|WTFPL|PD|MPL|LGPL|GPL|CC|CC-BY-SA}
+            None if license is not recognized
+
     ~1 second for NPM, no need to cache
     - 3295 unique values in PyPI (lowercase for normalization)
     + gpl + general public - lgpl - lesser = 575 + 152 - 152 + 45 = 530
@@ -245,6 +264,19 @@ def parse_license(license):
     - isc: just a few, but MANY in NPM
     - copyright: 763
         "copyright" is often (50/50) used with "mit"
+
+    >>> parse_license("shared under LGPL")
+    'LGPL'
+    >>> parse_license("shared under LGPL and MIT")  # MIT is more permissive
+    'MIT'
+    >>> parse_license("creative commons")
+    'CC'
+    >>> parse_license("GNU Public License")  # check it is not public domain
+    'GPL'
+    >>> parse_license("lesser GNU Public License")
+    'LGPL'
+    >>> parse_license("MIT and Public domain")
+    'PD'
     """
     if license and pd.notnull(license):
         license = license.lower()
@@ -287,12 +319,22 @@ def upstreams(ecosystem):
 
     :param ecosystem: str, {npm|pypi}
     :return pd.DataFrame, df.loc[package, month] = set([upstreams])
+
+    >>> ups = upstreams("pypi")
+    >>> isinstance(ups, pd.DataFrame)
+    True
+    >>> 50000 < len(ups) < 200000  # ~120K as of Jan 2018
+    True
+    >>> 150 < len(ups.columns) < 200  # number of month since Jan 2005
+    True
+    >>> ups.loc["django", "2017-12"] == {"pytz"}
+    True
     """
     def gen():
         es = get_ecosystem(ecosystem)
         deps = es.dependencies().sort_values("date")
         # will drop 101 record out of 4M for npm
-        deps = deps[pd.notnull(deps["date"])]
+        deps = deps[deps["date"].notnull()]
         # otherwise, there is a package in NPM dated 1970 which increases
         # dataframe size manyfold
         deps = deps[deps["date"] > START_DATES[ecosystem]]
@@ -325,9 +367,9 @@ def upstreams(ecosystem):
     idx = [dt.strftime("%Y-%m")
            for dt in pd.date_range(df['month'].min(), 'now', freq="M")]
 
-    deps = df.set_index(["name", "month"], drop=True)["deps"]
+    dependencies = df.set_index(["name", "month"], drop=True)["deps"]
     # ffill can be dan with axis=1; Transpose here is to reindex
-    return deps.unstack(level=0).reindex(idx).fillna(method='ffill').T
+    return dependencies.unstack(level=0).reindex(idx).fillna(method='ffill').T
 
 
 @d.memoize
@@ -338,6 +380,21 @@ def downstreams(ecosystem):
 
     :param ecosystem: str, {pypi|npm}
     :return: pd.DataFrame, df.loc[project, month] = set([*projects])
+
+    >>> ups = upstreams("pypi")
+    >>> dss = downstreams("pypi")
+    >>> isinstance(dss, pd.DataFrame)
+    True
+    >>> ups.shape == dss.shape
+    True
+    >>> all(ups.columns == dss.columns)
+    True
+    >>> all(ups.index == dss.index)
+    True
+    >>> 3500 < len(dss.loc["django", "2017-12"]) < 4000  # 3665
+    True
+    >>> dss.loc["django", "2007-12"] == {"pyswim"}
+    True
     """
     uss = upstreams(ecosystem)
 
@@ -369,9 +426,26 @@ def backporting(ecosystem, window=12):
     :param window: number of month to consider exercising backporting since
         observed
     :return: pd.Dataframe, df.loc[package, month] = <bool>
+
+    >>> bp = backporting("pypi")
+    >>> isinstance(bp, pd.DataFrame)
+    True
+    >>> 50000 < len(bp) < 200000
+    True
+    >>> 150 < len(bp.columns) < 200
+    True
+    >>> any(bp.loc['django', :'2017'])
+    True
+    >>> any(bp.loc['numpy', :'2017'])
+    True
+    >>> any(bp.loc['pandas', :'2017'])
+    False
+    >>> "2017-12" in bp.columns
+    True
     """
     es = get_ecosystem(ecosystem)
     deps = es.dependencies().reset_index().sort_values(["name", "date"])
+    projects = deps["name"].unique()
     deps = deps[~(deps["version"].map(versions.is_alpha))]
     deps["prev_version"] = deps["version"].shift(1)
     deps["prev_name"] = deps["name"].shift(1)
@@ -393,7 +467,7 @@ def backporting(ecosystem, window=12):
     # level_0 is an artifact of multiindex
     df = df.T.reset_index().set_index("name", drop=True).drop("level_0", axis=1)
     df = df.rolling(window=window, min_periods=1, axis=1).mean()
-    return df.reindex(deps["name"].unique(), fill_value=0).astype(bool)
+    return df.reindex(projects, fill_value=0).astype(bool)
 
 
 def cumulative_dependencies(deps):
@@ -440,11 +514,17 @@ def centrality(how, graph):
     :param how: str, networkx centrality method
     :param graph: nx.Graph or nx.DiGraph
     :return: dict, {node_label: centrality_value}
+
+    >>> centrality('degree', nx.Graph())
+    {}
+    >>> centrality('nonexistent', nx.Graph())
+    Traceback (most recent call last)
+    ...
+    AssertionError: Unknown centrality measure: nonexistent
+    >>> centrality('in_degree', nx.DiGraph())
+    {}
     """
-    if not how.endswith("_centrality") and how not in \
-            ('communicability', 'communicability_exp', 'estrada_index',
-             'communicability_centrality_exp', "subgraph_centrality_exp",
-             'dispersion', 'betweenness_centrality_subset', 'edge_load'):
+    if not hasattr(nx, how) and hasattr(nx, how + "_centrality"):
         how += "_centrality"
     assert hasattr(nx, how), "Unknown centrality measure: " + how
     return getattr(nx, how)(graph)
@@ -452,18 +532,29 @@ def centrality(how, graph):
 
 @fs_cache
 def dependencies_centrality(ecosystem, centrality_type):
+    """ Get centrality using dependencies graph
+    :param ecosystem: {"npm"|"pypi"}
+    :param centrality_type: networkx centrality method
+    :return a dataframe, df.loc[package, month] = <float>
+
+    >>> dc = dependencies_centrality("pypi", "in_degree")
+    >>> isinstance(dc, pd.DataFrame)
+    True
+    >>> 50000 < len(dc) < 200000
+    True
+    >>> 150 < len(dc.columns) < 200
+    True
+    >>> dc.loc["django", "2017-12"] > 0  # 0.0554358
+    True
     """
-    [edge_]current_flow_closeness is not defined for digraphs
-    current_flow_betweenness - didn't try
-    communicability*
-    estrada_index
-    """
-    logger.info("Collecting dependencies data..")
+    log = logging.getLogger("ghd.common.dependencies_centrality")
+
+    log.info("Collecting dependencies data..")
     uss = upstreams(ecosystem)
 
     def gen(stub):
         # stub = uss column
-        logger.info("Processing %s", stub.name)
+        log.info(stub.name)
         g = nx.DiGraph()
         for pkg, us in stub.items():
             if not us or pd.isnull(us):
