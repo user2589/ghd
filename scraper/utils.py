@@ -136,7 +136,7 @@ def quantile(df, column, q):
     :return: pd.Dataframe aggregated on the specified column
     """
     # TODO: test
-    assert column in df.columns
+    # assert column in df.columns  # - doesn't have to be, e.g. multilevel index
 
     return df.groupby(column).aggregate(
         lambda x: sum(x.sort_values(ascending=False).cumsum() / x.sum() <= q))
@@ -426,8 +426,8 @@ def domain_commit_stats(repo_name):
 
 
 # @fs_cache('aggregate')
-def commercial_involvement(repo_name):
-    cs = commits(repo_name)[['authored_date', 'author_email']]
+def commercial_involvement(url):
+    cs = commits(url)[['authored_date', 'author_email']]
     cs["commercial"] = email.is_commercial_bulk(cs["author_email"])
     stats = cs.groupby(cs['authored_date'].str[:7]).agg(
         {'authored_date': 'count', 'commercial': 'sum'}
@@ -436,8 +436,8 @@ def commercial_involvement(repo_name):
 
 
 # @fs_cache('aggregate')
-def university_involvement(repo_name):
-    cs = commits(repo_name)[['authored_date', 'author_email']]
+def university_involvement(url):
+    cs = commits(url)[['authored_date', 'author_email']]
     cs["university"] = email.is_university_bulk(cs["author_email"])
     stats = cs.groupby(cs['authored_date'].str[:7]).agg(
         {'authored_date': 'count', 'university': 'sum'}
