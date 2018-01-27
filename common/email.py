@@ -14,7 +14,24 @@ class InvalidEmail(ValueError):
 
 def clean(raw_email):
     """Extract email from a full address. Example:
-      'John Doe <jdoe+github@foo.com>' -> jdoe@foo.com"""
+      'John Doe <jdoe+github@foo.com>' -> jdoe@foo.com
+
+    >>> clean("me@someorg.com")
+    'me@someorg.com'
+    >>> clean("<me@someorg.com")
+    'me@someorg.com'
+    >>> clean("me@someorg.com>")
+    'me@someorg.com'
+    >>> clean("John Doe <me@someorg.com>")
+    'me@someorg.com'
+    >>> clean("John Doe <me+github.com@someorg.com")
+    'me@someorg.com'
+    >>> clean("John Doe me@someorg.com")
+    'me@someorg.com'
+    >>> # git2svn produces addresses like this:
+    >>> clean("<me@someorg.com@ce2b1a6d-e550-0410-aec6-3dcde31c8c00>")
+    'me@someorg.com'
+    """
     if not raw_email or pd.isnull(raw_email):
         return ""
     email = raw_email.split("<", 1)[-1].split(">", 1)[0]
@@ -31,6 +48,13 @@ def clean(raw_email):
 
 def domain(raw_email):
     # type: (str) -> str
+    """ Return email domain from a raw email address
+
+    >>> domain("test@dep.uni.edu>")
+    'dep.uni.edu'
+    >>> domain("test@dep.uni.edu@ce2b1a6d-e550-0410-aec6-3dcde31c8c00>")
+    'dep.uni.edu'
+    """
     if not raw_email or pd.isnull(raw_email):
         return ""
     return clean(raw_email).rsplit("@", 1)[-1]
@@ -55,6 +79,7 @@ def university_domains():
     ).drop(
         ["chat.ru"]
     ).to_csv("email_university_domains.csv", index=False)
+
     """
     fh = open(
         os.path.join(os.path.dirname(__file__), "email_university_domains.csv"))
@@ -86,6 +111,9 @@ def public_domains():
     ).drop(  # mistakenly labeled as public
         ["unican.es"]
     ).to_csv("email_public_domains.csv", index=False)
+
+    >>> not public_domains().intersection(university_domains())
+    True
     """
     fh = open(
         os.path.join(os.path.dirname(__file__), "email_public_domains.csv"))
@@ -175,6 +203,24 @@ def is_university(addr, domains=None):
     :param addr: email address
     :param domains: optional, list of university domains
     :return: bool
+    >>> is_university("john@cmu.edu")
+    True
+    >>> is_university("john@abc.cmu.edu")
+    True
+    >>> is_university("john@abc.edu.uk")
+    True
+    >>> is_university("john@edu.au")
+    True
+    >>> is_university("john@aedu.au")
+    False
+    >>> is_university("john@vvsu.ru")
+    True
+    >>> is_university("john@abc.vvsu.ru")
+    True
+    >>> is_university("john@england.edu")
+    False
+    >>> is_university("john@gmail.com")
+    False
     """
     if domains is None:
         domains = university_domains()
@@ -197,6 +243,18 @@ def is_public(addr, domains=None):
     :param addr: email address
     :param domains: optional set of public mail service domains
     :return: bool
+    >>> is_public("john@cmu.edu")
+    False
+    >>> is_public("john@gmail.com")
+    True
+    >>> is_public("john@163.com")
+    True
+    >>> is_public("john@qq.com")
+    True
+    >>> is_public("john@abc.vvsu.ru")
+    False
+    >>> is_public("john@australia.edu")
+    True
     """
     if domains is None:
         domains = public_domains()
