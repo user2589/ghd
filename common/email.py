@@ -1,4 +1,5 @@
 
+import logging
 import os
 
 import pandas as pd
@@ -6,6 +7,11 @@ import pandas as pd
 from common import decorators as d
 
 fs_cache = d.fs_cache('common')
+
+try:
+  basestring
+except NameError:
+  basestring = str
 
 
 class InvalidEmail(ValueError):
@@ -31,7 +37,13 @@ def clean(raw_email):
     >>> # git2svn produces addresses like this:
     >>> clean("<me@someorg.com@ce2b1a6d-e550-0410-aec6-3dcde31c8c00>")
     'me@someorg.com'
+    >>> clean(42)
+    Traceback (most recent call last):
+        ...
+    InvalidEmail
     """
+    if not isinstance(raw_email, basestring):
+        raise InvalidEmail
     if not raw_email or pd.isnull(raw_email):
         return ""
     email = raw_email.split("<", 1)[-1].split(">", 1)[0]
@@ -58,6 +70,14 @@ def domain(raw_email):
     if not raw_email or pd.isnull(raw_email):
         return ""
     return clean(raw_email).rsplit("@", 1)[-1]
+
+
+def _domain(raw_email):
+    """Non-throwing version of domain, suitable for .map() """
+    try:
+        return domain(raw_email)
+    except InvalidEmail:
+        return None
 
 
 @d.memoize
@@ -131,36 +151,45 @@ def public_domains():
 @d.memoize
 def domain_user_stats():
     # type: () -> pd.Series
-    """
-    from collections import defaultdict
-    from common import utils as common
-    import scraper
+    """ Return statistics on
 
-    stats = defaultdict(set)
-    urls = common.package_urls("pypi")
-    for url in reversed(urls):
-        print("Processing:", url)
-        for email_addr in scraper.commits(url)["author_email"]:
-            if not email_addr or pd.isnull(email_addr):
-                continue
-            try:
-                user, domain = clean(email_addr).split("@")
-            except InvalidEmail:
-                continue
-            stats[domain].add(user)
-    s = pd.Series({dm: len(users) for dm, users in stats.items()})
-    s.rename("users").sort_values(ascending=False).to_csv(
-        "common/email_domain_users.csv", encoding="utf8", header=True)
-
+    TODO: turn into a test
     # sanity check - are non-public, non-university domains belong to companies?
     # YES, except single user domains
     es = pd.Series("test@" + s.index, index=s.index)
     s[~(is_public_bulk(es) | is_university_bulk(es))].sort_values(
         ascending=False)
     """
-    return pd.Series.from_csv(
-        os.path.join(os.path.dirname(__file__), "email_domain_users.csv"),
-        header=0)
+    fname = os.path.join(os.path.dirname(__file__), "email_domain_users.csv")
+    if os.path.isfile(fname):
+        return pd.read_csv(fname, header=0, squeeze=True, index_col=0)
+
+    from collections import defaultdict
+    from common import utils as common
+    import scraper
+
+    log = logging.getLogger("domain_user_stats")
+    stats = defaultdict(set)
+    for ecosystem in common.ECOSYSTEMS:
+        urls = common.package_urls(ecosystem)
+        for package_name, url in urls.items():
+            log.info(package_name)
+            try:
+                cs = scraper.commits(url)
+            except scraper.RepoDoesNotExist:
+                continue
+            for email_addr in cs["author_email"].dropna().unique():
+                if not email_addr or pd.isnull(email_addr):
+                    continue
+                try:
+                    user, email_domain = clean(email_addr).split("@")
+                except InvalidEmail:
+                    continue
+                stats[email_domain].add(user)
+    s = pd.Series({dm: len(users) for dm, users in stats.items()})
+    s = s.rename("users").sort_values(ascending=False)
+    s.to_csv("common/email_domain_users.csv", encoding="utf8", header=True)
+    return s
 
 
 @d.memoize
@@ -168,7 +197,7 @@ def commercial_domains():
     # type: () -> set
     """ Return list of commercial email domains, which means:
     - domain is not public
-    - domain is not universityt
+    - domain is not university
     - it is not personal (more than 1 person using this domain)
     >>> "google.com" in commercial_domains()
     True
@@ -189,7 +218,7 @@ def commercial_domains():
         dus[~is_public_bulk(es) & ~is_university_bulk(es) & (dus > 1)].index)
 
 
-def is_university(addr, domains=None):
+def is_university(addr):
     # type: (str) -> bool
     """ Check if provided email has a university domain
 
@@ -222,21 +251,25 @@ def is_university(addr, domains=None):
     >>> is_university("john@gmail.com")
     False
     """
-    if domains is None:
-        domains = university_domains()
     try:
         addr_domain = domain(addr)
     except InvalidEmail:
         return False
     chunks = addr_domain.split(".")
-    if len(chunks) < 2:
+    if len(chunks) < 2:  # local or invalid address
         return False
+
+    domains = university_domains()
+    # many universitites have departmental emails, such as cs.cmu.edu. However,
+    # the original dataset only has top level domain (cmu.edu). So, what we need
+    # to do is to strip leading subdomains until match or nothing to strip:
+    # isri.cs.cmu.edu (no match) -> cs.cmu.edu (no match) -> cmu.edu (match)
     return (chunks[-1] == "edu" and chunks[-2] not in ("england", "australia"))\
         or chunks[-2] == "edu" \
         or any(".".join(chunks[i:]) in domains for i in range(len(chunks)-1))
 
 
-def is_public(addr, domains=None):
+def is_public(addr):
     # type: (str) -> bool
     """ Check if the passed email registered at a free pubic mail server
 
@@ -255,9 +288,9 @@ def is_public(addr, domains=None):
     False
     >>> is_public("john@australia.edu")
     True
+
+    # TODO: test local addresses
     """
-    if domains is None:
-        domains = public_domains()
     try:
         addr_domain = domain(addr)
     except InvalidEmail:
@@ -268,32 +301,34 @@ def is_public(addr, domains=None):
     return len(chunks[-1]) > 5 \
         or len(chunks) < 2 \
         or addr_domain.endswith("local") \
-        or addr_domain in domains
+        or addr_domain in public_domains()
 
 
-def is_commercial(addr, domains=None):
-    if domains is None:
-        domains = commercial_domains()
+def is_commercial(addr):
+    """
+    TODO: test
+    """
     try:
         addr_domain = domain(addr)
     except InvalidEmail:
         return False
-    return addr_domain in domains
+    return addr_domain in commercial_domains()
+
+
+def bulk_check(domain_provider):
+    def wrapper(addr_series):
+        domains = domain_provider()
+        return addr_series.map(_domain).map(lambda addr: addr in domains)
+    return wrapper
+
+
+is_public_bulk = bulk_check(public_domains)
+is_commercial_bulk = bulk_check(commercial_domains)
 
 
 def is_university_bulk(addr_series):
     # type: (pd.Series) -> pd.Series
-    domains = university_domains()
-    return addr_series.map(lambda addr: is_university(addr, domains))
-
-
-def is_public_bulk(addr_series):
-    # type: (pd.Series) -> pd.Series
-    domains = public_domains()
-    return addr_series.map(lambda addr: is_public(addr, domains))
-
-
-def is_commercial_bulk(addr_series):
-    # type: (pd.Series) -> pd.Series
-    domains = commercial_domains()
-    return addr_series.map(lambda addr: is_commercial(addr, domains))
+    """ Since university subdomains have to be matched by parts, we can't use
+    bulk_check. Consider caching this call
+    """
+    return addr_series.map(lambda addr: is_university(addr))
