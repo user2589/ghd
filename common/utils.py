@@ -675,7 +675,9 @@ def contributors_centrality(ecosystem, centrality_type):
 
 
 def survival_data(ecosystem, smoothing=1):
-    """
+    """ The main method of this module.
+    These data is to be used by Cox regression
+
     :param ecosystem: ("npm"|"pypi")
     :param smoothing:  number of month to average over
     :return: pd.Dataframe with columns:
@@ -686,6 +688,8 @@ def survival_data(ecosystem, smoothing=1):
          downstreams, upstreams, transitive downstreams, transitive upstreams,
          contributors centrality,
          dependencies centrality
+
+    This dataset takes hours to days to compute, so not tested
     """
     log = logging.getLogger("ghd.survival")
     death_window = 12
@@ -698,23 +702,23 @@ def survival_data(ecosystem, smoothing=1):
         usernames = get_repo_usernames(urls)
         ui = user_info(ecosystem)
         pkginfo = es.packages_info()
+        bporting = backporting(ecosystem)
 
-        # FIXME: uncomment when done with testing
-        # log.info("Dependencies counts..")
-        # uss = upstreams(ecosystem)  # upstreams, every cell is a set()
-        # dss = downstreams(uss)  # downstreams, every cell is a set()
-        # usc = count_values(uss)  # upstream counts
-        # dsc = count_values(dss)  # downstream counts
-        # # transitive counts
-        # t_usc = count_values(cumulative_dependencies(uss))
-        # t_dsc = count_values(cumulative_dependencies(dss))
+        log.info("Dependencies counts..")
+        uss = upstreams(ecosystem)  # upstreams, every cell is a set()
+        dss = downstreams(ecosystem)  # downstreams, every cell is a set()
+        usc = count_values(uss)  # upstream counts
+        dsc = count_values(dss)  # downstream counts
+        # transitive counts
+        t_usc = count_values(cumulative_dependencies(uss))
+        t_dsc = count_values(cumulative_dependencies(dss))
 
         log.info("Dependencies centrality..")
-        dc_closeness = dependencies_centrality("pypi", "closeness")
-        dc_degree = dependencies_centrality("pypi", "in_degree")
+        dc_katz = dependencies_centrality("pypi", "katz")
         dc_closeness = dependencies_centrality("pypi", "closeness")
 
         log.info("Collecting dataset..")
+        cc_degree = contributors_centrality("pypi", "degree")
 
         for project_name, url in urls.items():
             log.info(project_name)
@@ -734,12 +738,15 @@ def survival_data(ecosystem, smoothing=1):
                 'project': project_name,
                 'dead': 1,
                 'last_observation': 0,
+                # the trailing zero is a multyindexing artifact
                 'org': ui.loc[uname["provider_name"], uname["login"]]["org"][0],
                 'license': parse_license(pkginfo.loc[project_name, "license"]),
+                'backporting': bporting.loc[project_name, cs.index],
                 'commercial': scraper.commercial_involvement(url).reindex(
                     cs.index, fill_value=0),
                 'university': scraper.university_involvement(url).reindex(
                     cs.index, fill_value=0),
+                # COMMIT METRICS
                 'commits': cs,
                 'contributors': scraper.commit_users(url).reindex(
                     cs.index, fill_value=0),
@@ -750,6 +757,7 @@ def survival_data(ecosystem, smoothing=1):
                 'q90': scraper.contributions_quantile(url, 0.9).reindex(
                     cs.index, fill_value=0),
                 # 'gini': scraper.commit_gini(url).reindex(cs.index),
+                # ISSUES METRICS
                 'issues': scraper.new_issues(url).reindex(
                     cs.index, fill_value=0),
                 'non_dev_issues': scraper.non_dev_issue_stats(url).reindex(
@@ -758,22 +766,24 @@ def survival_data(ecosystem, smoothing=1):
                     cs.index, fill_value=0),
                 'non_dev_submitters': scraper.non_dev_submitters(url).reindex(
                     cs.index, fill_value=0),
-                # 'upstreams': usc.loc[project_name, cs.index],
-                # 'downstreams': dsc.loc[project_name, cs.index],
-                # 't_downstreams': t_dsc.loc[project_name, cs.index],
-                # 't_upstreams': t_usc.loc[project_name, cs.index],
+                # DEPENDENCIES
+                'upstreams': usc.loc[project_name, cs.index],
+                'downstreams': dsc.loc[project_name, cs.index],
+                't_downstreams': t_dsc.loc[project_name, cs.index],
+                't_upstreams': t_usc.loc[project_name, cs.index],
+                'dc_katz': dc_katz.loc[project_name, cs.index],
+                'dc_closeness': dc_closeness.loc[project_name, cs.index],
+                # CONTRIBUTORS CENTRALITY
+                'cc': cc_degree.loc[project_name, cs.index]
             })
 
             dead = (cs[::-1].rolling(window=death_window).mean(
-                )[:death_window - 2:-1] < death_threshold).shift(-1).fillna(method='ffill')
+                )[:death_window - 2:-1] < death_threshold
+            ).shift(-1).fillna(method='ffill')
             df['dead'] = dead
             death = dead[dead].index.min()
             if death and pd.notnull(death):
                 df = df.loc[:death]
-
-            # FIXME: centrality
-            # 'cc_X': None,
-            # 'dc_X': None
 
             df = df.rolling(window=smoothing, min_periods=1).mean()
             df.iloc[-1, df.columns.get_loc("last_observation")] = 1
