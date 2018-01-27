@@ -100,7 +100,7 @@ def public_domains():
     x.extend([
         'gmail.com', 'users.noreply.github.com', 'hotmail.com',
         'googlemail.com', 'users.sourceforge.net', 'iki.fi',
-        'yahoo.com', 'me.com', 'gmx.de', 'jaraco.com', 'cihar.com',
+        'yahoo.com', 'me.com', 'gmx.de', 'cihar.com',
         'yandex.ru', 'outlook.com', 'gmx.net', 'web.de', 'pobox.com',
         'yahoo.co.uk', 'qq.com', 'free.fr', 'icloud.com', '163.com',
         '50mail.com', 'live.com', 'lavabit.com', 'mail.ru', '126.com',
@@ -112,6 +112,14 @@ def public_domains():
         ["unican.es"]
     ).to_csv("email_public_domains.csv", index=False)
 
+    >>> 'gmail.com' in public_domains()
+    True
+    >>> '163.com' in public_domains()
+    True
+    >>> 'qq.com' in public_domains()
+    True
+    >>> 'jaraco.com' in public_domains()
+    False
     >>> not public_domains().intersection(university_domains())
     True
     """
@@ -158,31 +166,23 @@ def domain_user_stats():
 @d.memoize
 def commercial_domains():
     # type: () -> set
-    """ Return list of personal email domains
-        (i.e. having only one registered person at this domain)
-
-    How to get the original CSV:
-    x = requests.get(
-        "https://gist.githubusercontent.com/tbrianjones/5992856/raw/"
-        "87f527af7bdd21997722fa65143a9af7bee92583/"
-        "free_email_provider_domains.txt").text.split()
-    # manually coded
-    x.extend([
-        'gmail.com', 'users.noreply.github.com', 'hotmail.com',
-        'googlemail.com', 'users.sourceforge.net', 'iki.fi',
-        'yahoo.com', 'me.com', 'gmx.de', 'jaraco.com', 'cihar.com',
-        'yandex.ru', 'outlook.com', 'gmx.net', 'web.de', 'pobox.com',
-        'yahoo.co.uk', 'qq.com', 'free.fr', 'icloud.com', '163.com',
-        '50mail.com', 'live.com', 'lavabit.com', 'mail.ru', '126.com',
-        'yahoo.fr', 'seznam.cz'
-    ])
-    domains = list(set(x))  # make it unique
-    pd.Series(domains, index=domains, name="domain"
-    ).drop(  # mistakenly labeled as public
-        ["unican.es"]
-    ).to_csv("email_public_domains.csv", index=False)
+    """ Return list of commercial email domains, which means:
+    - domain is not public
+    - domain is not universityt
+    - it is not personal (more than 1 person using this domain)
+    >>> "google.com" in commercial_domains()
+    True
+    >>> "microsoft.com" in commercial_domains()
+    True
+    >>> "gmail.com" in commercial_domains()  # public
+    False
+    >>> "cmu.edu" in commercial_domains()  # university
+    False
+    >>> "isri.cs.cmu.edu" in commercial_domains()  # university department
+    False
+    >>> "jaraco.com" in commercial_domains()  # personal
+    False
     """
-
     dus = domain_user_stats()
     es = "test@" + pd.Series(dus.index, index=dus.index)
     return set(
