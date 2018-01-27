@@ -524,9 +524,11 @@ def centrality(how, graph):
     >>> centrality('in_degree', nx.DiGraph())
     {}
     """
-    if not hasattr(nx, how) and hasattr(nx, how + "_centrality"):
+    if (not hasattr(nx, how) or not callable(getattr(nx, how))) \
+            and hasattr(nx, how + "_centrality"):
         how += "_centrality"
-    assert hasattr(nx, how), "Unknown centrality measure: " + how
+    assert hasattr(nx, how) and callable(getattr(nx, how)), \
+        "Unknown centrality measure: " + how
     return getattr(nx, how)(graph)
 
 
@@ -714,11 +716,11 @@ def survival_data(ecosystem, smoothing=1):
         t_dsc = count_values(cumulative_dependencies(dss))
 
         log.info("Dependencies centrality..")
-        dc_katz = dependencies_centrality("pypi", "katz")
-        dc_closeness = dependencies_centrality("pypi", "closeness")
+        dc_katz = dependencies_centrality(ecosystem, "katz")
+        dc_closeness = dependencies_centrality(ecosystem, "closeness")
 
         log.info("Collecting dataset..")
-        cc_degree = contributors_centrality("pypi", "degree")
+        cc_degree = contributors_centrality(ecosystem, "degree")
 
         for project_name, url in urls.items():
             log.info(project_name)
