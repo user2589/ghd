@@ -128,11 +128,18 @@ def gini(x):
 
 def quantile(df, column, q):
     # type: (pd.DataFrame, str, float) -> pd.DataFrame
-    # TODO: test
-    def agg(x):
-        return sum(x.sort_values(ascending=False).cumsum() / x.sum() <= q)
+    """ Returns number of users responsible for a specific
 
-    return df.groupby(column).aggregate(agg)
+    :param df: an input pd.Dataframe, e.g. commit_user_stats
+    :param column: a column to aggregate on, e.g. username
+    :param q: quantile, e.g. 0.9
+    :return: pd.Dataframe aggregated on the specified column
+    """
+    # TODO: test
+    assert column in df.columns
+
+    return df.groupby(column).aggregate(
+        lambda x: sum(x.sort_values(ascending=False).cumsum() / x.sum() <= q))
 
 
 def user_stats(stats, date_field, aggregated_field):
@@ -195,11 +202,24 @@ def commits(repo_url):
 @fs_cache('aggregate', 2)
 def commit_user_stats(repo_name):
     # type: (str) -> pd.DataFrame
+    """
+    :param repo_name: str, repo name (e.g. github.com/pandas-dev/pandas
+    :return a dataframe indexed on (month, username) with a commits column
+
+    # This repo contains one commit out of order 2005 while repo started in 2016
+    >>> cus = commit_user_stats("github.com/user2589/schooligan")
+    >>> isinstance(cus, pd.DataFrame)
+    True
+    >>> cus.loc[("2016-05", "user2589"), "commits"]
+    3
+    >>> cus.reset_index()["authored_date"].min() > "2016"
+    True
+    """
     stats = commits(repo_name)
     # check for null and empty string is required because of file caching.
     # commits scraped immediately will have empty string, but after save/load
     # it will be converted to NaN by pandas
-    min_date = stats.loc[pd.isnull(stats["parents"]) | stats["parents"].astype(bool),
+    min_date = stats.loc[stats["parents"].isnull() | (~stats["parents"].astype(bool)),
                          "authored_date"].min()
     stats = stats[stats["authored_date"] >= min_date]
     stats['author'] = stats['author'].fillna(DEFAULT_USERNAME)
