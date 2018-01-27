@@ -256,91 +256,27 @@ def parse_license(license):
     return None
 
 
-@d.memoize
-def contributors(ecosystem, months=1):
-    # type: (str) -> pd.DataFrame
-    """ Get a historical list of developers contributing to ecosystem projects
-    This function takes 7m20s for 54k PyPi projects @months=1, 23m20s@4
-    :param ecosystem: {"pypi"|"npm"}
-    :month int, default 1. get contributors for this number of last months
-    :return: pd.DataFrame, index is projects, columns are months, cells are
-        sets of stirng github usernames
+def count_values(df):
+    # type: (pd.DataFrame) -> pd.DataFrame
+    """ Count number of values in lists/sets
+    It is initially introduced to count dependencies
+    >>> c = count_values(pd.DataFrame({1:[set(), set(range(4)), [1,2,3,2,4]]}))
+    >>> c.loc[0, 1]
+    0
+    >>> c.loc[1, 1]
+    4
+    >>> c.loc[2, 1]
+    5
     """
-    assert months > 0
+    # takes around 20s for full pypi history
 
-    fname = fs_cache.get_cache_fname("contributors", ecosystem, months)
-    if fs_cache.expired(fname):
-        # fcd = first_contrib_dates(ecosystem).dropna()
-        start = scraper.MIN_DATE
-        columns = [d.strftime("%Y-%m")
-                   for d in pd.date_range(start, 'now', freq="M")][:-3]
+    def count(s):
+        return len(s) if s and pd.notnull(s) else 0
 
-        def gen():
-            for package, repo in package_urls(ecosystem).items():
-                logger.info("Processing %s: %s", package, repo)
-                try:
-                    s = scraper.commit_user_stats(repo).reset_index()[
-                        ['authored_date', 'author']].groupby('authored_date').agg(
-                        lambda df: set(df['author']))['author'].rename(
-                        package).reindex(columns)
-                except scraper.RepoDoesNotExist:
-                    continue
-                if months > 1:
-                    s = pd.Series(
-                        (set().union(*[c for c in s[max(0, i-months+1):i+1]
-                                     if c and pd.notnull(c)])
-                         for i in range(len(columns))),
-                        index=columns, name=package)
-                yield s
-
-        df = pd.DataFrame(gen(), columns=columns)
-
-        # transform and write the dataframe
-        df.applymap(
-            lambda s: ",".join(str(u) for u in s) if s and pd.notnull(s) else ""
-        ).to_csv(fname)
-
-        return df
-
-    df = pd.read_csv(fname, index_col=0, dtype=str)
-    return df.applymap(
-        lambda s: set(s.split(",")) if s and pd.notnull(s) else set())
-
-
-@fs_cache
-def connectivity(ecosystem, months=1000):
-    # type: (str, int) -> pd.DataFrame
-    """ Number of projects focal project is connected to via its developers
-
-    :param ecosystem: {"pypi"|"npm"}
-    :param months: number of months to lookbehind for shared contributors
-    :type ecosystem: str
-    :type months: int
-    :return: pd.DataFrame, index is projects, columns are months
-    :rtype months: pd.DataFrame
-    """
-    # "-" stands for anonymous user
-    cs = contributors(ecosystem, months).applymap(
-        lambda x: x.difference(["-"]) if pd.notnull(x) else x)
-    owners = package_urls(ecosystem).map(lambda x: x.split("/", 1)[0])
-
-    def gen():
-        for month, row in cs.T.iterrows():
-            logger.info("Processing %s", month)
-            conn = []
-
-            projects = defaultdict(set)
-            for project, users in row.items():
-                for user in users:
-                    projects[user].add(project)
-
-            for project, users in row.items():
-                ps = set().union(*[projects[user] for user in users])
-                conn.append(sum(owners[p] != owners[project] for p in ps))
-
-            yield pd.Series(conn, index=row.index, name=month)
-
-    return pd.DataFrame(gen(), columns=cs.index).T
+    if isinstance(df, pd.DataFrame):
+        return df.applymap(count)
+    elif isinstance(df, pd.Series):
+        return df.apply(count)
 
 
 @d.memoize
@@ -497,29 +433,6 @@ def cumulative_dependencies(deps):
     return deps.apply(gen, axis=0)
 
 
-def count_values(df):
-    # type: (pd.DataFrame) -> pd.DataFrame
-    """ Count number of values in lists/sets
-    It is initially introduced to count dependencies
-    >>> c = count_values(pd.DataFrame({1:[set(), set(range(4)), [1,2,3,2,4]]}))
-    >>> c.loc[0, 1]
-    0
-    >>> c.loc[1, 1]
-    4
-    >>> c.loc[2, 1]
-    5
-    """
-    # takes around 20s for full pypi history
-
-    def count(s):
-        return len(s) if s and pd.notnull(s) else 0
-
-    if isinstance(df, pd.DataFrame):
-        return df.applymap(count)
-    elif isinstance(df, pd.Series):
-        return df.apply(count)
-
-
 def centrality(how, graph):
     # type: (str, nx.Graph) -> dict
     """ A wrapper for networkx centrality methods to allow for parametrization
@@ -563,43 +476,109 @@ def dependencies_centrality(ecosystem, centrality_type):
     return uss.apply(gen, axis=0).fillna(0)
 
 
-@fs_cache
+@d.memoize
+def contributors(ecosystem, months=1):
+    # type: (str) -> pd.DataFrame
+    """ Get a historical list of developers contributing to ecosystem projects
+    ~7s when cached (PyPI), few minutes otherwise
+
+    :param ecosystem: {"pypi"|"npm"}
+    :param months int(=1), use contributors for this number of last months
+    :return: pd.DataFrame, index is projects, columns are months, cells are
+        sets of str github usernames
+    >>> c = contributors("pypi")
+    >>> isinstance(c, pd.DataFrame)
+    True
+    >>> 50000 < len(c) < 200000
+    True
+    >>> 150 < len(c.columns) < 200
+    True
+    >>> len(c.loc["django", "2017-12"]) > 30  # 32, as of Jan 2018
+    True
+    """
+    assert months > 0
+
+    @fs_cache
+    def _contributors(*_):
+        start = START_DATES[ecosystem]
+        columns = [dt.strftime("%Y-%m")
+                   for dt in pd.date_range(start, 'now', freq="M")]
+
+        def gen():
+            log = logging.getLogger("ghd.common._contributors")
+
+            for package, repo in package_urls(ecosystem).items():
+                log.info(package)
+                try:
+                    s = scraper.commit_user_stats(repo).reset_index()[
+                        ['authored_date', 'author']].groupby('authored_date').agg(
+                        lambda df: set(df['author']))['author'].rename(
+                        package).reindex(columns)
+                except scraper.RepoDoesNotExist:
+                    continue
+                if months > 1:
+                    s = pd.Series(
+                        (set().union(*[c for c in s[max(0, i-months+1):i+1]
+                                     if c and pd.notnull(c)])
+                         for i in range(len(columns))),
+                        index=columns, name=package)
+                yield s
+
+        return pd.DataFrame(gen(), columns=columns).applymap(
+            lambda s: ",".join(str(u) for u in s) if s and pd.notnull(s) else "")
+
+    return _contributors(ecosystem, months).applymap(
+        lambda s: set(s.split(",")) if s and pd.notnull(s) else set())
+
+
+# @fs_cache
 def contributors_centrality(ecosystem, centrality_type):
+    """ Get centrality measures for contributors graph.
+    Doesn't make much sense for centrality_types other than degree
+    12s
+
+    >>> cc = contributors_centrality("pypi", "degree")
+    >>> isinstance(cc, pd.DataFrame)
+    True
+    >>> 50000 < len(cc) < 200000
+    True
+    >>> 150 < len(cc.columns) < 200
+    True
+    >>> cc.loc["django", "2017-12"] > 40  # ~90 for the late 2017
     """
-    {in|out}_degree are not supported
-    eigenvector|katz - didn't converge (increase number of iterations?)
-    current_flow_* - requires connected graph
-    betweenness_subset* - requires sources
-    communicability - doesn't work, internal error
-    subgraph - unknown (update nx?)
-    local_reaching - requires v
-    """
-    logger.info("Getting contributors..")
+    log = logging.getLogger("ghd.common.contributors_centrality")
+
+    log.info("Getting contributors..")
     contras = contributors(ecosystem)
     # {in|out}_degree is not defined for undirected graphs
 
-    logger.info("Processing contributors centrality by month..")
+    log.info("Processing contributors centrality by month..")
 
     def gen(stub):
-        logger.info("Processing %s", stub.name)
+        # stub is a Series corresponding to a month
+        log.info(stub.name)
         projects = defaultdict(set)  # projects[contributor] = set(projects)
 
-        for pkg, cs in stub.items():
-            if not cs or pd.isnull(cs):
+        # first, find what projects every contributor contributed to
+        for project, contributors_set in stub.items():
+            if not contributors_set or pd.isnull(contributors_set):
                 continue
-            for c in cs:
-                projects[c].add(pkg)
+            for contributor in contributors_set:
+                projects[contributor].add(project)
 
         projects["-"] = set()
         g = nx.Graph()
 
-        for pkg, cs in stub.items():
-            for c in cs:
-                for p in projects[c]:
-                    if p != pkg:
-                        g.add_edge(pkg, p)
-        return pd.Series(centrality(centrality_type, g),
-                         index=stub.index)
+        # then, for all pairs add an edge to the graph
+        for project, contributors_set in stub.items():
+            for contributor in contributors_set:
+                for p in projects[contributor]:
+                    if p > project:  # avoid duplicating edges
+                        g.add_edge(project, p)
+
+        ct = centrality(centrality_type, g)
+        # ct is now nx.DegreeView, need to transform into dict
+        return pd.Series(dict(ct), index=stub.index)
 
     return contras.apply(gen, axis=0).fillna(0)
 
