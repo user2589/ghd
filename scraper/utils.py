@@ -365,7 +365,7 @@ def issue_user_stats(repo_name):
     return user_stats(issues(repo_name), "created_at", "new_issues")
 
 
-@fs_cache('aggregate', 2)
+# @fs_cache('aggregate', 2)
 def non_dev_issue_user_stats(repo_name):
     return user_stats(non_dev_issues(repo_name), "created_at", "new_issues")
 

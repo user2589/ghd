@@ -5,6 +5,7 @@ import networkx as nx
 import pandas as pd
 
 from collections import defaultdict
+import datetime
 import logging
 
 from common import decorators as d
@@ -624,7 +625,6 @@ def contributors(ecosystem, months=1):
         lambda s: set(s.split(",")) if s and pd.notnull(s) else set())
 
 
-# @fs_cache
 def contributors_centrality(ecosystem, centrality_type):
     """ Get centrality measures for contributors graph.
     Doesn't make much sense for centrality_types other than degree
@@ -676,7 +676,78 @@ def contributors_centrality(ecosystem, centrality_type):
     return contras.apply(gen, axis=0).fillna(0)
 
 
-def survival_data(ecosystem, smoothing=1):
+def dead_projects(ecosystem, window, threshold):
+    # definition of dead: <= 1 commit per month on average in a year
+    # or, if commits data unavailable, over 1 year since last release
+    es = get_ecosystem(ecosystem)
+    deps = es.dependencies()
+    commits = monthly_data(ecosystem, "commits")
+    last_release = deps[['date']].groupby("name").max()
+    death_date = pd.to_datetime(
+        last_release['date'], format="%Y-%m-%d") + datetime.timedelta(days=365)
+    death_str = death_date.dt.strftime("%Y-%m-%d")
+
+    dead = pd.DataFrame([(death_str <= month).rename(month)
+                         for month in commits.columns]).T
+    sure_dead = (commits.T[::-1].rolling(
+                 window=window, min_periods=1).max() < threshold)[::-1].T.astype(bool)
+    dead.update(sure_dead)
+    return dead
+
+
+@fs_cache
+def monthly_data(ecosystem, feature):
+    urls = package_urls(ecosystem)
+    idx = [dt.strftime("%Y-%m")
+           for dt in pd.date_range(START_DATES[ecosystem], 'now', freq="M")]
+
+    full_handlers = {
+        'upstreams': lambda es: count_values(upstreams(es)),
+        't_upstreams': lambda es: count_values(cumulative_dependencies(upstreams(es))),
+        'downstreams': lambda es: count_values(downstreams(es)),
+        't_downstreams': lambda es: count_values(cumulative_dependencies(downstreams(es))),
+        'backporting': backporting,
+        'dc_katz': lambda es: dependencies_centrality(es, 'katz'),
+        'dc_closeness': lambda es: dependencies_centrality(es, "closeness"),
+        'cc_degree': lambda es: contributors_centrality(es, "degree"),
+    }
+
+    project_handlers = {
+        # COMMIT METRICS
+        'commits': lambda url: scraper.commit_stats(url),
+        'contributors': lambda url: scraper.commit_users(url),
+        'q50': lambda url: scraper.contributions_quantile(url, 0.5),
+        'q70': lambda url: scraper.contributions_quantile(url, 0.7),
+        'q90': lambda url: scraper.contributions_quantile(url, 0.9),
+        'gini': lambda url: scraper.commit_gini(url),
+        # ISSUES METRICS
+        'issues': lambda url: scraper.new_issues(url),
+        'non_dev_issues': lambda url: scraper.non_dev_issue_stats(url),
+        'submitters': lambda url: scraper.submitters(url),
+        'non_dev_submitters': lambda url: scraper.non_dev_submitters(url),
+        # EMAILS
+        'commercial': lambda url: scraper.commercial_involvement(url),
+        'university': lambda url: scraper.university_involvement(url),
+    }
+
+    if feature in full_handlers:
+        return full_handlers[feature](ecosystem).T.reindex(
+            idx, fill_value=0).T.reindex(urls.index, fill_value=0)
+    elif feature in project_handlers:
+        def gen():
+            log = logging.getLogger(feature)
+            for project_name, url in urls.items():
+                log.info(project_name)
+                try:
+                    yield project_handlers[feature](url).rename(project_name)
+                except scraper.RepoDoesNotExist:
+                    continue
+
+        return pd.DataFrame(gen(), columns=idx).fillna(0)
+    raise ValueError("Unknown feature: " + feature)
+
+
+def survival_data(ecosystem, smoothing=1, end_date="2017-12"):
     """ The main method of this module.
     These data is to be used by Cox regression
 
@@ -697,9 +768,21 @@ def survival_data(ecosystem, smoothing=1):
     death_window = 12
     death_threshold = 1.0
 
+    cs = monthly_data["commits"]
+
     def gen():
+        features = (
+            'commits', 'contributors', 'q90',
+            'issues', 'non_dev_issues', 'non_dev_submitters'
+            'upstreams', 'downstreams', 't_upstreams', 't_downstreams',
+            'dc_katz', 'dc_closeness',
+            'cc_degree'
+        )
+        metrics = {feature: monthly_data(ecosystem, feature)
+                   for feature in features}
+
         es = get_ecosystem(ecosystem)
-        urls = package_urls(ecosystem)[:20]
+        urls = package_urls(ecosystem)
         log.info("Getting package info and user profiles..")
         usernames = get_repo_usernames(urls)
         ui = user_info(ecosystem)

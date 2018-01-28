@@ -59,11 +59,8 @@ class fs_cache(object):
             cache_fpath = self.get_cache_fname(func.__name__, *args)
 
             if not self.expired(cache_fpath):
-                df = pd.read_csv(
-                    cache_fpath, index_col=range(self.idx), encoding="utf8")
-                if len(df.columns) == 1 and self.idx == 1:
-                    return df[df.columns[0]]
-                return df
+                return pd.read_csv(cache_fpath, index_col=range(self.idx),
+                                   encoding="utf8", squeeze=True)
 
             res = func(*args)
             if isinstance(res, pd.DataFrame):
