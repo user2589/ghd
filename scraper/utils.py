@@ -74,11 +74,11 @@ def parse_url(url):
     # type: (str) -> (str, str)
     """Return provider and project id
     >>> parse_url("github.com/user/repo")
-    ("github.com", "user/repo")
+    ('github.com', 'user/repo')
     >>> parse_url("bitbucket.org/user/repo")
-    ("bitbucket.org", "user/repo")
+    ('bitbucket.org', 'user/repo')
     >>> parse_url("gitlab.com/user/repo")
-    ("gitlab.com", "user/repo")
+    ('gitlab.com', 'user/repo')
     >>> parse_url("A quick brown fox jumps over the lazy dog")
     (None, None)
     >>> parse_url(None)
@@ -115,7 +115,7 @@ def gini(x):
     """ Gini index of a given iterable
     simplified version from https://github.com/oliviaguest/gini
 
-    >>> round(gini([1]*99 + [10**6]))
+    >>> round(gini([1]*99 + [10**6]), 2)
     0.99
     >>> round(gini([1]*100), 2)
     0.0
@@ -126,33 +126,42 @@ def gini(x):
     return np.sort(x).dot(2 * np.arange(n) - n + 1) / (n * np.sum(x))
 
 
-def quantile(df, column, q):
+def quantile(data, column, q):
     # type: (pd.DataFrame, str, float) -> pd.DataFrame
     """ Returns number of users responsible for a specific
 
-    :param df: an input pd.Dataframe, e.g. commit_user_stats
+    :param data: an input pd.Dataframe, e.g. commit_user_stats.reset_index()
+        note that without index reset commit_user_stats is a Series
     :param column: a column to aggregate on, e.g. username
     :param q: quantile, e.g. 0.9
     :return: pd.Dataframe aggregated on the specified column
+    >>> df = pd.DataFrame({'foo': 1, 'bar': [1,1,1,1,1,1,1,1,1,1]})
+    >>> quantile(df, 'foo', 0.5).loc[1, 'bar']
+    5
+    >>> quantile(df, 'foo', 0.9).loc[1, 'bar']
+    9
     """
-    # TODO: test
     # assert column in df.columns  # - doesn't have to be, e.g. multilevel index
 
-    return df.groupby(column).aggregate(
+    # how it works: sort descending, run cumulative sum and compare to sum
+    # number of records under q*sum is exactly what we're looking for
+    return data.groupby(column).aggregate(
         lambda x: sum(x.sort_values(ascending=False).cumsum() / x.sum() <= q))
 
 
 def user_stats(stats, date_field, aggregated_field):
-    # type: (pd.DataFrame, str, str) -> pd.DataFrame
+    # type: (pd.DataFrame, str, str) -> pd.Series
     """Helper function for internal use only
-    Aggregates specified stats dataframe by month/users"""
+    Aggregates specified stats dataframe by month/users
+    """
     if stats.empty:
         # a dirty hack to allow further aggregation
-        return pd.DataFrame(columns=[date_field, 'author', aggregated_field])
-    return stats[['author']].groupby(
+        return pd.DataFrame(
+            columns=[date_field, 'author', aggregated_field]).set_index(
+            [date_field, "author"])[aggregated_field]
+    return stats['author'].groupby(
         [stats[date_field].str[:7], stats['author']]).count().rename(
-        columns={'author': aggregated_field}
-    ).astype(np.int)
+        aggregated_field).astype(np.int)
 
 
 def zeropad(df, fill_value=0):
@@ -183,13 +192,14 @@ def commits(repo_url):
     find -type f -name '*.csv' -exec rename 's/(?<=\/)commits\./_commits./' {} +
 
     >>> cs = commits("github.com/benjaminp/six")
-    >>> isinstance(commits, pd.DataFrame)
+    >>> isinstance(cs, pd.DataFrame)
     True
-    >>> len(commits) > 400
+    >>> 450 < len(cs) < 2000  # 454 as of Jan 2018
     True
-    >>> # non-existent repository
-    >>> len(commits("github.com/user2589/nothingtoseehere")) == 0
-    True
+    >>> len(commits("github.com/user2589/nothingtoseehere"))
+    Traceback (most recent call last):
+        ...
+    RepoDoesNotExist: GH API returned status 404
     """
     provider, project_url = get_provider(repo_url)
     return pd.DataFrame(
@@ -199,20 +209,28 @@ def commits(repo_url):
     ).set_index('sha', drop=True)
 
 
-@fs_cache('aggregate', 2)
+# @fs_cache('aggregate', 2)
 def commit_user_stats(repo_name):
-    # type: (str) -> pd.DataFrame
+    # type: (str) -> pd.Series
     """
     :param repo_name: str, repo name (e.g. github.com/pandas-dev/pandas
     :return a dataframe indexed on (month, username) with a commits column
 
     # This repo contains one commit out of order 2005 while repo started in 2016
-    >>> cus = commit_user_stats("github.com/user2589/schooligan")
-    >>> isinstance(cus, pd.DataFrame)
+    >>> cus = commit_user_stats("github.com/django/django")
+    >>> isinstance(cus, pd.Series)
     True
-    >>> cus.loc[("2016-05", "user2589"), "commits"]
+    >>> 4100 < len(cus) < 8000  # 4155 unique month/user combinations / Jan 18
+    True
+    >>> 13 < cus["2017-12"]["sir-sigurd"] < 100 # 22 as of Jan 2018
+    True
+    >>> "2005" < cus.reset_index()["authored_date"].min() < "2009"
+    True
+    >>> "2017" < cus.reset_index()["authored_date"].max() < "2022"
+    True
+    >>> len(cus.reset_index().columns)
     3
-    >>> cus.reset_index()["authored_date"].min() > "2016"
+    >>> 1 <= len(commit_user_stats("github.com/user2589/schooligan")) < 10  # 1
     True
     """
     stats = commits(repo_name)
@@ -235,10 +253,10 @@ def commit_stats(repo_name):
     True
     >>> 140 < len(cs) < 240
     True
+    >>> 100 < cs["2017-12"] < 200
+    True
     """
-    cus = commit_user_stats(repo_name)
-    cs = cus.groupby('authored_date').sum()["commits"]
-    return zeropad(cs)
+    return zeropad(commit_user_stats(repo_name).groupby('authored_date').sum())
 
 
 # @fs_cache('aggregate')
@@ -248,41 +266,45 @@ def commit_users(repo_name):
     >>> cu = commit_users("github.com/django/django")
     >>> isinstance(cu, pd.Series)
     True
-    >>> 140 < len(cu) < 240)
+    >>> 140 < len(cu) < 240
+    True
+    >>> 30 < cu["2017-12"] < 100  # 32
     True
     """
     return commit_user_stats(repo_name).groupby(
-        'authored_date').count()["commits"].rename("users")
+        'authored_date').count().rename("users")
 
 
 # @fs_cache('aggregate')
 def commit_gini(repo_name):
-    # type: (str) -> pd.DataFrame
+    # type: (str) -> pd.Series
     """
-
     >>> g = commit_gini("github.com/django/django")
     >>> isinstance(g, pd.Series)
     True
-    >>> 140 < len(g) < 240
+    >>> 150 < len(g) < 240
     True
     >>> all(0 <= i <= 1 for i in g)
     True
     """
     return commit_user_stats(repo_name).groupby(
-        "authored_date").aggregate(gini)['commits'].rename("gini")
+        "authored_date").aggregate(gini).rename("gini")
 
 
 def contributions_quantile(repo_name, q):
-    # type: (str, float) -> pd.DataFrame
+    # type: (str, float) -> pd.Series
     """
-    >>> q50 = contributions_quantile("django/django", 0.5)
+    >>> q50 = contributions_quantile("github.com/django/django", 0.5)
     >>> isinstance(q50, pd.Series)
     True
-    >>> 140 < len(q50) < 240)
+    >>> 140 < len(q50) < 240
     True
-    >>> all(i >= 0 for i in q50)
+    >>> all(q50 >= 0)
+    True
+    >>> 0 < q50["2017-12"] < 10  # 2
+    True
     """
-    return quantile(commit_user_stats(repo_name),
+    return quantile(commit_user_stats(repo_name).reset_index(),
                     "authored_date", q)["commits"].rename("q%g" % (q*100))
 
 
@@ -291,13 +313,13 @@ def issues(repo_url):
     # type: (str) -> pd.DataFrame
     """ Get a dataframe with issues
 
-    >>> issues = issues("github.com/benjaminp/six")
-    >>> isinstance(issues, pd.DataFrame)
+    >>> iss = issues("github.com/benjaminp/six")
+    >>> isinstance(iss, pd.DataFrame)
     True
-    >>> len(issues) > 180
+    >>> 180 < len(iss) < 500  # 191 as of Jan 2018
     True
-    >>> len(issues("github.com/user2589/ghd")) == 0
-    True
+    >>> len(issues("github.com/user2589/minicms"))
+    0
     """
     provider, project_url = get_provider(repo_url)
     return pd.DataFrame(
@@ -311,11 +333,10 @@ def non_dev_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """Same as new_issues with subtracted issues authored by contributors
 
-    >>> iss = non_dev_issues("github.com/benjaminp/six")
-    >>> isinstance(iss, pd.DataFrame)
+    >>> ndi = non_dev_issues("github.com/benjaminp/six")
+    >>> isinstance(ndi, pd.DataFrame)
     True
-    >>> # 16 issues as of Aug 2017
-    >>> len(issues) > 15
+    >>> 20 < len(ndi) < len(issues("github.com/benjaminp/six"))  # 23 as of 2018
     True
     """
     cs = commits(repo_name)[['authored_date', 'author']]
@@ -327,8 +348,20 @@ def non_dev_issues(repo_name):
     return i.loc[~(i['fc'] < i['created_at']), ['author', 'created_at']]
 
 
-@fs_cache('aggregate', 2)
+# @fs_cache('aggregate', 2)
 def issue_user_stats(repo_name):
+    # type: (str) -> pd.Series
+    """
+    >>> ius = issue_user_stats("github.com/pandas-dev/pandas")
+    >>> isinstance(ius, pd.Series)
+    True
+    >>> 6000 < len(ius) < 10000  # 6261
+    True
+    >>> 12 < ius["2017-12"]["toobaz"] < 24  # 13
+    True
+    >>> (ius > 0).all()
+    True
+    """
     return user_stats(issues(repo_name), "created_at", "new_issues")
 
 
@@ -342,14 +375,15 @@ def new_issues(repo_name):
     # type: (str) -> pd.Series
     """ New issues aggregated by month
 
-    >>> issues = new_issues("github.com/pandas-dev/pandas")
-    >>> isinstance(issues, pd.Series)
+    >>> iss = new_issues("github.com/pandas-dev/pandas")
+    >>> isinstance(iss, pd.Series)
     True
-    >>> 78 < len(issues) < 100
+    >>> 78 < len(iss) < 100  # 88
     True
-
+    >>> 200 < iss["2017-12"] < 300  # 211
+    True
     """
-    return issue_user_stats(repo_name).groupby('created_at').sum()['new_issues']
+    return issue_user_stats(repo_name).groupby('created_at').sum()
 
 
 # @fs_cache('aggregate')
@@ -361,8 +395,7 @@ def non_dev_issue_stats(repo_name):
     True
     >>> 78 < len(ndi) < 180
     True
-    >>> iss = new_issues("github.com/pandas-dev/pandas")
-    >>> all(iss >= ndi)
+    >>> all(new_issues("github.com/pandas-dev/pandas") >= ndi)
     True
     """
     i = non_dev_issues(repo_name)
@@ -375,33 +408,53 @@ def submitters(repo_name):
     # type: (str) -> pd.Series
     """Number of submitters aggregated by month
 
-    >>>  ss = submitters("github.com/pandas-dev/pandas")
-    >>> isinstance(submitters, pd.Series)
+    >>> ss = submitters("github.com/pandas-dev/pandas")
+    >>> isinstance(ss, pd.Series)
     True
     >>> 78 < len(ss) < 180
     True
-    >>> all(s >= 0 for s in ss)
+    >>> all(ss >= 0)
     True
-    >>> iss = new_issues("github.com/pandas-dev/pandas")
-    >>> all(iss >= ss)
+    >>> (new_issues("github.com/pandas-dev/pandas") >= ss).all()
     True
     """
     return issue_user_stats(repo_name).groupby(
-        'created_at').count()["new_issues"].rename("submitters")
+        'created_at').count().rename("submitters")
 
 
 # @fs_cache('aggregate')
 def non_dev_submitters(repo_name):
     # type: (str) -> pd.Series
-    """New issues aggregated by month"""
+    """New issues aggregated by month
+    >>> nds = non_dev_submitters("github.com/pandas-dev/pandas")
+    >>> isinstance(nds, pd.Series)
+    True
+    >>> 80 < len(nds) < 180
+    True
+    >>> (nds >= 0).all()
+    True
+    >>> (non_dev_issue_stats("github.com/pandas-dev/pandas") >= nds).all()
+    True
+    """
     return non_dev_issue_user_stats(repo_name).groupby(
-        'created_at').count()["new_issues"].rename("non_dev_submitters")
+        'created_at').count().rename("non_dev_submitters")
 
 
 @fs_cache('aggregate')
 def closed_issues(repo_name):
-    # type: (str) -> pd.DataFrame
-    """New issues aggregated by month"""
+    # type: (str) -> pd.Series
+    """New issues aggregated by month
+
+    >>> ci = closed_issues("github.com/pandas-dev/pandas")
+    >>> isinstance(ci, pd.Series)
+    True
+    >>> 80 < len(ci) < 150
+    True
+    >>> 170 < ci["2017-12"] < 1000  # 179
+    True
+    >>> (ci >= 0).all()
+    True
+    """
     df = issues(repo_name)
     closed = df.loc[df['closed'], 'closed_at'].astype(object)
     return closed.groupby(closed.str[:7]).count()
@@ -409,20 +462,20 @@ def closed_issues(repo_name):
 
 @fs_cache('aggregate')
 def open_issues(repo_name):
-    # type: (str) -> pd.DataFrame
-    """Open issues aggregated by month"""
+    # type: (str) -> pd.Series
+    """Open issues aggregated by month
+    >>> oi = open_issues("github.com/pandas-dev/pandas")
+    >>> isinstance(oi, pd.Series)
+    True
+    >>> 80 < len(oi) < 150
+    True
+    >>> (oi.dropna() >= 0).all()
+    True
+    """
     submitted = new_issues(repo_name).cumsum()
     closed = closed_issues(repo_name).cumsum()
     res = submitted - closed
     return res.rename("open_issues")
-
-
-@fs_cache('aggregate')
-def domain_commit_stats(repo_name):
-    cs = commits(repo_name).reset_index()[['sha', 'author_email']]
-    cs['domain'] = cs['author_email'].map(email.domain)
-    return cs[['domain', 'sha']].groupby('domain').count()['sha'].rename(
-        'commits').sort_values(ascending=False)
 
 
 # @fs_cache('aggregate')

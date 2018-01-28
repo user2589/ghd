@@ -17,7 +17,7 @@ def test():
         fab.local("python -m doctest common/utils.py")
         fab.local("python -m doctest common/versions.py")
         fab.local("python -m doctest pypi/utils.py")
-        fab.local("python -m unittest scraper.test")
+        fab.local("python -m doctest scraper/utils.py")
 
 
 def clean():
