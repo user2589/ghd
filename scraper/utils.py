@@ -237,7 +237,8 @@ def commit_user_stats(repo_name):
     # check for null and empty string is required because of file caching.
     # commits scraped immediately will have empty string, but after save/load
     # it will be converted to NaN by pandas
-    min_date = stats.loc[stats["parents"].isnull() | (~stats["parents"].astype(bool)),
+    min_date = stats.loc[stats["parents"].isnull()
+                         | (~stats["parents"].astype(bool)),
                          "authored_date"].min()
     stats = stats[stats["authored_date"] >= min_date]
     stats['author'] = stats['author'].fillna(DEFAULT_USERNAME)
@@ -395,7 +396,7 @@ def non_dev_issue_stats(repo_name):
     True
     >>> 78 < len(ndi) < 180
     True
-    >>> all(new_issues("github.com/pandas-dev/pandas") >= ndi)
+    >>> (new_issues("github.com/pandas-dev/pandas") >= ndi).all()
     True
     """
     i = non_dev_issues(repo_name)
@@ -480,6 +481,18 @@ def open_issues(repo_name):
 
 # @fs_cache('aggregate')
 def commercial_involvement(url):
+    # type: (str) -> pd.Series
+    """
+    >>> ci = commercial_involvement("github.com/pandas-dev/pandas")
+    >>> isinstance(ci, pd.Series)
+    True
+    >>> 100 < len(ci) < 150
+    True
+    >>> (0 <= ci).all()
+    True
+    >>> (1 >= ci).all()
+    True
+    """
     cs = commits(url)[['authored_date', 'author_email']]
     cs["commercial"] = email.is_commercial_bulk(cs["author_email"])
     stats = cs.groupby(cs['authored_date'].str[:7]).agg(
@@ -490,6 +503,18 @@ def commercial_involvement(url):
 
 # @fs_cache('aggregate')
 def university_involvement(url):
+    # type: (str) -> pd.Series
+    """
+    >>> ui = university_involvement("github.com/pandas-dev/pandas")
+    >>> isinstance(ui, pd.Series)
+    True
+    >>> 100 < len(ui) < 150
+    True
+    >>> (0 <= ui).all()
+    True
+    >>> (1 >= ui).all()
+    True
+    """
     cs = commits(url)[['authored_date', 'author_email']]
     cs["university"] = email.is_university_bulk(cs["author_email"])
     stats = cs.groupby(cs['authored_date'].str[:7]).agg(
