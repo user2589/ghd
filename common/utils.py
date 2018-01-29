@@ -1,5 +1,5 @@
 
-from __future__ import unicode_literals
+# from __future__ import unicode_literals
 
 import networkx as nx
 import pandas as pd
@@ -175,7 +175,7 @@ def get_repo_usernames(urls):
                 'provider_name': provider_name,
                 'login': project_url.split("/", 1)[0]
             }
-    return pd.DataFrame(gen(), index=urls.index)
+    return pd.DataFrame(gen(), index=urls.index.rename("name"))
 
 
 @d.fs_cache('common', 2)
@@ -237,8 +237,11 @@ def user_info(ecosystem):
     ui = mapreduce.map(usernames.reset_index(), get_user_info, num_workers=6)
     # TODO: move to provider
     ui["org"] = ui["type"].map({"Organization": True, "User": False})
-    return ui.drop(["type"], axis=1).set_index(
+    ui = ui.drop(["type"], axis=1).set_index(
         ["provider_name", "login"], drop=True)
+    # remove duplicated NaN rows for missing / deleted accounts
+    ui = ui[~ui.index.duplicated()]
+    return ui
 
 
 def parse_license(license):
@@ -697,6 +700,13 @@ def dead_projects(ecosystem, window, threshold):
 
 @fs_cache
 def monthly_data(ecosystem, feature):
+    # type: (str, str) -> pd.DataFrame
+    """
+
+    :param ecosystem: str, {"npm"|"pypi"}
+    :param feature:
+    :return: pd.DataFrame, df.loc[project, month] = <feature_value>
+    """
     urls = package_urls(ecosystem)
     idx = [dt.strftime("%Y-%m")
            for dt in pd.date_range(START_DATES[ecosystem], 'now', freq="M")]
@@ -721,13 +731,13 @@ def monthly_data(ecosystem, feature):
         'q90': lambda url: scraper.contributions_quantile(url, 0.9),
         'gini': lambda url: scraper.commit_gini(url),
         # ISSUES METRICS
-        'issues': lambda url: scraper.new_issues(url),
-        'non_dev_issues': lambda url: scraper.non_dev_issue_stats(url),
-        'submitters': lambda url: scraper.submitters(url),
-        'non_dev_submitters': lambda url: scraper.non_dev_submitters(url),
+        'issues': scraper.new_issues,
+        'non_dev_issues': scraper.non_dev_issue_stats,
+        'submitters': scraper.submitters,
+        'non_dev_submitters': scraper.non_dev_submitters,
         # EMAILS
-        'commercial': lambda url: scraper.commercial_involvement(url),
-        'university': lambda url: scraper.university_involvement(url),
+        'commercial': scraper.commercial_involvement,
+        'university': scraper.university_involvement,
     }
 
     if feature in full_handlers:
@@ -747,11 +757,14 @@ def monthly_data(ecosystem, feature):
     raise ValueError("Unknown feature: " + feature)
 
 
-def survival_data(ecosystem, smoothing=1, end_date="2017-12"):
+@fs_cache
+def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1):
     """ The main method of this module.
     These data is to be used by Cox regression
 
     :param ecosystem: ("npm"|"pypi")
+    :param start_date: str, remove projects started before this date
+    :param end_date: str, rermove observations after this date
     :param smoothing:  number of month to average over
     :return: pd.Dataframe with columns:
          age, date, project, dead, last_observation
@@ -768,113 +781,102 @@ def survival_data(ecosystem, smoothing=1, end_date="2017-12"):
     death_window = 12
     death_threshold = 1.0
 
-    cs = monthly_data["commits"]
+    cs = monthly_data(ecosystem, "commits")
 
-    def gen():
-        features = (
-            'commits', 'contributors', 'q90',
-            'issues', 'non_dev_issues', 'non_dev_submitters'
-            'upstreams', 'downstreams', 't_upstreams', 't_downstreams',
-            'dc_katz', 'dc_closeness',
-            'cc_degree'
-        )
-        metrics = {feature: monthly_data(ecosystem, feature)
-                   for feature in features}
+    # drop everything after end_date (date when dataset was collected)
+    cs = cs.loc[:, :end_date]
 
-        es = get_ecosystem(ecosystem)
-        urls = package_urls(ecosystem)
-        log.info("Getting package info and user profiles..")
-        usernames = get_repo_usernames(urls)
-        ui = user_info(ecosystem)
-        pkginfo = es.packages_info()
-        bporting = backporting(ecosystem)
+    # drop deleted projects (after fillna they have 0 commits in total)
+    cs = cs[cs.sum(axis=1) > 0]
+    cs.index.name = "name"
+    cs.columns.name = "month"
 
-        log.info("Dependencies counts..")
-        uss = upstreams(ecosystem)  # upstreams, every cell is a set()
-        dss = downstreams(ecosystem)  # downstreams, every cell is a set()
-        usc = count_values(uss)  # upstream counts
-        dsc = count_values(dss)  # downstream counts
-        # transitive counts
-        t_usc = count_values(cumulative_dependencies(uss))
-        t_dsc = count_values(cumulative_dependencies(dss))
+    # we need package info to get license
+    es = get_ecosystem(ecosystem)
+    pkginfo = es.packages_info()
+    licenses = pkginfo["license"].map(parse_license)
 
-        log.info("Dependencies centrality..")
-        dc_katz = dependencies_centrality(ecosystem, "katz")
-        dc_closeness = dependencies_centrality(ecosystem, "closeness")
+    urls = package_urls(ecosystem)
+    usernames = get_repo_usernames(urls)
+    ui = user_info(ecosystem)
 
-        log.info("Collecting dataset..")
-        cc_degree = contributors_centrality(ecosystem, "degree")
+    def get_userinfo(row):
+        try:
+            return ui.loc[row["provider_name"], row["login"]]
+        except KeyError:
+            return {}
 
-        for project_name, url in urls.items():
-            log.info(project_name)
+    proj_info = usernames.apply(get_userinfo, axis=1).dropna()
+    # drop projects for which we don't have user/org info (i.e. deleted)
+    cs = cs.reindex(user_info.index)
 
-            try:
-                cs = scraper.commit_stats(url)
-            except scraper.RepoDoesNotExist:
-                # even though package_url checks for repos existance, it could
-                # be deleted later
-                continue
+    # at this point cs is a pd.Dataframe, cs.loc[project, month] = value
+    # now let's convert it into a single column with index (project, month)
+    df = pd.DataFrame(cs.T.unstack().rename('commits'))
 
-            if not len(cs):  # repo does not exist
-                continue
-            uname = usernames.loc[project_name]
-            df = pd.DataFrame({
-                'age': range(len(cs)),
-                'project': project_name,
-                'dead': 1,
-                'last_observation': 0,
-                # the trailing zero is a multyindexing artifact
-                'org': ui.loc[uname["provider_name"], uname["login"]]["org"][0],
-                'license': parse_license(pkginfo.loc[project_name, "license"]),
-                'backporting': bporting.loc[project_name, cs.index],
-                'commercial': scraper.commercial_involvement(url).reindex(
-                    cs.index, fill_value=0),
-                'university': scraper.university_involvement(url).reindex(
-                    cs.index, fill_value=0),
-                # COMMIT METRICS
-                'commits': cs,
-                'contributors': scraper.commit_users(url).reindex(
-                    cs.index, fill_value=0),
-                # 'q50': scraper.contributions_quantile(url, 0.5).reindex(
-                #     cs.index, fill_value=0),
-                # 'q70': scraper.contributions_quantile(url, 0.7).reindex(
-                #     cs.index, fill_value=0),
-                'q90': scraper.contributions_quantile(url, 0.9).reindex(
-                    cs.index, fill_value=0),
-                # 'gini': scraper.commit_gini(url).reindex(cs.index),
-                # ISSUES METRICS
-                'issues': scraper.new_issues(url).reindex(
-                    cs.index, fill_value=0),
-                'non_dev_issues': scraper.non_dev_issue_stats(url).reindex(
-                    cs.index, fill_value=0),
-                'submitters': scraper.submitters(url).reindex(
-                    cs.index, fill_value=0),
-                'non_dev_submitters': scraper.non_dev_submitters(url).reindex(
-                    cs.index, fill_value=0),
-                # DEPENDENCIES
-                'upstreams': usc.loc[project_name, cs.index],
-                'downstreams': dsc.loc[project_name, cs.index],
-                't_downstreams': t_dsc.loc[project_name, cs.index],
-                't_upstreams': t_usc.loc[project_name, cs.index],
-                'dc_katz': dc_katz.loc[project_name, cs.index],
-                'dc_closeness': dc_closeness.loc[project_name, cs.index],
-                # CONTRIBUTORS CENTRALITY
-                'cc': cc_degree.loc[project_name, cs.index]
-            })
+    features = (
+        'contributors', 'q90',
+        'issues', 'non_dev_issues', 'submitters', 'non_dev_submitters',
+        'upstreams', 't_upstreams', 'downstreams', 't_downstreams',
+        'dc_katz', 'dc_closeness',
+        'backporting',
+        'cc_degree',
+        'university', 'commercial'
+    )
+    for feature in features:
+        log.info(feature)
+        df[feature] = monthly_data(
+            ecosystem, feature).T.unstack().rename(feature)
 
-            dead = (cs[::-1].rolling(window=death_window).mean(
-                )[:death_window - 2:-1] < death_threshold
-            ).shift(-1).fillna(method='ffill')
-            df['dead'] = dead
-            death = dead[dead].index.min()
-            if death and pd.notnull(death):
-                df = df.loc[:death]
+    # at this point we don't need multiindex anymore
+    df = df.reset_index()
 
-            df = df.rolling(window=smoothing, min_periods=1).mean()
-            df.iloc[-1, df.columns.get_loc("last_observation")] = 1
-            df = df[((df["age"] % smoothing) == 0) | df["last_observation"]]
+    df["org"] = df["name"].map(proj_info["org"])
+    df["license"] = df["name"].map(licenses)
 
-            for _, row in df.iterrows():
-                yield row
+    # drop observations before first commit date
+    # ... and projects started before start_date
+    # e.g. Django and numpy were started before PyPI so data are incomplete
+    fcd = df.loc[df["commits"] > 0, ["name", 'month']
+                 ].groupby('name').first()["month"]
+    df = df[(df['name'].map(fcd) <= df["month"]) &
+            (df['name'].map(fcd) > start_date)]
 
-    return pd.DataFrame(gen()).reset_index(drop=True)
+    def age_gen():
+        last_month = "9999"
+        age = 0
+        for month in df["month"]:
+            age = (age + 1) * (last_month < month)
+            yield age
+            last_month = month
+
+    # important to do it before dropping after-death observations
+    # otherwise can catchu up on a project died before the next has started
+    df["age"] = list(age_gen())
+
+    # find first death and drop everything afterwards
+    # it's ok to jam last <window> month of observations, we'll discard it later
+    df["dead"] = (
+        df["commits"][::-1].rolling(window=death_window, min_periods=1).mean()
+        < death_threshold)[::-1].shift(-1).fillna(method='ffill')
+
+    # drop last <death_window> month
+    # (incomplete observation + contaminated by the next project data)
+    df = df[df["month"] < cs.columns[-death_window]]
+
+    # drop everything after first death (even later revivals, if any)
+    death = df.loc[
+        df["dead"], ["name", "month"]].groupby("name").first()["month"]
+    df = df[df["name"].map(death) >= df["month"]]
+
+    # TODO: convert backporting to int
+    # TODO: smoothing
+    df = df.rolling(window=smoothing, min_periods=1).mean()
+
+    # TODO: check last_observation
+
+    df["last_observation"] = df["name"] != df["name"].shift(-1)
+
+    df = df[((df["age"] % smoothing) == 0) | df["last_observation"]]
+
+    return df
