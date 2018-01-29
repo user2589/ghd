@@ -100,6 +100,14 @@ def university_domains():
         ["chat.ru"]
     ).to_csv("email_university_domains.csv", index=False)
 
+    >>> isinstance(university_domains(), set)
+    True
+    >>> len(university_domains()) > 4000  # 4902 as of Jan 2018
+    True
+    >>> 'cmu.edu' in university_domains()  # .edu domains are excluded
+    False
+    >>> 'upsa.es' in university_domains()
+    True
     """
     fh = open(
         os.path.join(os.path.dirname(__file__), "email_university_domains.csv"))
@@ -159,6 +167,12 @@ def domain_user_stats():
     es = pd.Series("test@" + s.index, index=s.index)
     s[~(is_public_bulk(es) | is_university_bulk(es))].sort_values(
         ascending=False)
+    >>> isinstance(domain_user_stats(), pd.Series)
+    True
+    >>> len(domain_user_stats()) > 100000
+    True
+    >>> (domain_user_stats() > 0).all()
+    True
     """
     fname = os.path.join(os.path.dirname(__file__), "email_domain_users.csv")
     if os.path.isfile(fname):
@@ -306,7 +320,12 @@ def is_public(addr):
 
 def is_commercial(addr):
     """
-    TODO: test
+    >>> is_commercial("test@google.com")
+    True
+    >>> is_commercial("test@microsoft.com")
+    True
+    >>> is_commercial("test@jaraco.com")
+    False
     """
     try:
         addr_domain = domain(addr)
