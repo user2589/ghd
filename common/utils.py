@@ -471,7 +471,7 @@ def backporting(ecosystem, window=12):
     # level_0 is an artifact of multiindex
     df = df.T.reset_index().set_index("name", drop=True).drop("level_0", axis=1)
     df = df.rolling(window=window, min_periods=1, axis=1).mean()
-    return df.reindex(projects, fill_value=0).astype(bool)
+    return df.reindex(projects, fill_value=0).astype(bool).astype(int)
 
 
 def cumulative_dependencies(deps):
@@ -781,7 +781,13 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
     death_window = 12
     death_threshold = 1.0
 
+    # ensure there is enough to chip off for smoothing at the end
+    assert smoothing <= death_window, "Smoothing window is too big"
+
     cs = monthly_data(ecosystem, "commits")
+
+    # ensure there is enough to chip off for smoothing in the beginning
+    assert (cs.columns < start_date).sum() > smoothing, "Use later start_date"
 
     # drop everything after end_date (date when dataset was collected)
     cs = cs.loc[:, :end_date]
@@ -814,6 +820,8 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
     # now let's convert it into a single column with index (project, month)
     df = pd.DataFrame(cs.T.unstack().rename('commits'))
 
+    # make sure all numeric features included and supported by monthly_data
+    # features outside of the list will not be smoothed
     features = (
         'contributors', 'q90',
         'issues', 'non_dev_issues', 'submitters', 'non_dev_submitters',
@@ -823,6 +831,8 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
         'cc_degree',
         'university', 'commercial'
     )
+    # subset of features not to be smoothed (e.g. boolean values)
+    no_smoothing = {'backporting'}
     for feature in features:
         log.info(feature)
         df[feature] = monthly_data(
@@ -831,14 +841,12 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
     # at this point we don't need multiindex anymore
     df = df.reset_index()
 
-    df["org"] = df["name"].map(proj_info["org"])
-    df["license"] = df["name"].map(licenses)
-
+    # first commit dates, will be used later to cut leading zero observations
+    fcd = df.loc[df["commits"] > 0, ["name", 'month']
+                 ].groupby('name').first()["month"]
     # drop observations before first commit date
     # ... and projects started before start_date
     # e.g. Django and numpy were started before PyPI so data are incomplete
-    fcd = df.loc[df["commits"] > 0, ["name", 'month']
-                 ].groupby('name').first()["month"]
     df = df[(df['name'].map(fcd) <= df["month"]) &
             (df['name'].map(fcd) > start_date)]
 
@@ -860,6 +868,12 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
         df["commits"][::-1].rolling(window=death_window, min_periods=1).mean()
         < death_threshold)[::-1].shift(-1).fillna(method='ffill')
 
+    if smoothing > 1:
+        for feature in features:
+            if feature not in no_smoothing:
+                df[feature] = df[feature].rolling(
+                    window=smoothing, min_periods=1).mean()
+
     # drop last <death_window> month
     # (incomplete observation + contaminated by the next project data)
     df = df[df["month"] < cs.columns[-death_window]]
@@ -867,16 +881,19 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
     # drop everything after first death (even later revivals, if any)
     death = df.loc[
         df["dead"], ["name", "month"]].groupby("name").first()["month"]
-    df = df[df["name"].map(death) >= df["month"]]
+    df = df[df["name"].map(death).fillna("9999") >= df["month"]]
 
-    # TODO: convert backporting to int
-    # TODO: smoothing
-    df = df.rolling(window=smoothing, min_periods=1).mean()
-
-    # TODO: check last_observation
+    # doing it only so late to save couple milliseconds on deleted rows
+    df["org"] = df["name"].map(proj_info["org"])
+    df["license"] = df["name"].map(licenses)
 
     df["last_observation"] = df["name"] != df["name"].shift(-1)
 
+    # convert bool columns to int (for R processing)
+    for feature in ('org', 'dead', 'last_observation'):
+        df[feature] = df[feature].astype(int)
+
+    # resample to have only n-th observation (n=smoothing) and the last one
     df = df[((df["age"] % smoothing) == 0) | df["last_observation"]]
 
     return df
