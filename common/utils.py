@@ -178,7 +178,7 @@ def get_repo_usernames(urls):
     return pd.DataFrame(gen(), index=urls.index.rename("name"))
 
 
-@d.fs_cache('common', 2)
+@fs_cache
 def user_info(ecosystem):
     # type: (str) -> pd.DataFrame
     """ Return user profile fields
@@ -197,13 +197,13 @@ def user_info(ecosystem):
     >>> ui = user_info("pypi")
     >>> isinstance(ui, pd.DataFrame)
     True
-    >>> 30000 < len(ui) < 200000  # 34500
+    >>> 50000 < len(ui) < 200000  # 59192 as of Jan 18
     True
-    >>> ui.loc[("github.com", "pandas-dev"), "org"][0]
+    >>> ui.loc["pandas", "org"]
     True
-    >>> ui.loc[("github.com", "django"), "org"][0]
+    >>> ui.loc["django", "org"]
     True
-    >>> ui.loc[("github.com", "user2589"), "org"][0]
+    >>> ui.loc["minicms", "org"]
     False
     """
 
@@ -229,19 +229,32 @@ def user_info(ecosystem):
     # by the same reason, user_info() above gets row and not url value
     urls = package_urls(ecosystem)
     urls.index = urls  # will need it in get_user_info
-
     # it's going to be a pd.DataFrame(provider_name, login, url)
     usernames = get_repo_usernames(urls).reset_index()
-    usernames = usernames.groupby(["provider_name", "login"]).first()
+
+    # ensure uniqueness of (provider, login) pairs to avoid extra requests
     # GitHub seems to ban IP (will get HTTP 403) if use 8 workers
-    ui = mapreduce.map(usernames.reset_index(), get_user_info, num_workers=6)
+    ui = mapreduce.map(
+        usernames.groupby(["provider_name", "login"]).first().reset_index(),
+        get_user_info, num_workers=6)
+
     # TODO: move to provider
     ui["org"] = ui["type"].map({"Organization": True, "User": False})
     ui = ui.drop(["type"], axis=1).set_index(
         ["provider_name", "login"], drop=True)
     # remove duplicated NaN rows for missing / deleted accounts
     ui = ui[~ui.index.duplicated()]
-    return ui
+
+    def map2project(row):
+        try:
+            return ui.loc[row["provider_name"], row["login"]]
+        except KeyError:
+            return {}
+
+    # finally, reindex by project instead of (provider, login)
+    urls = package_urls(ecosystem)
+    usernames = get_repo_usernames(urls)
+    return usernames.apply(map2project, axis=1).dropna()
 
 
 def parse_license(license):
@@ -802,19 +815,10 @@ def survival_data(ecosystem, start_date="2005", end_date="2017-12", smoothing=1)
     pkginfo = es.packages_info()
     licenses = pkginfo["license"].map(parse_license)
 
-    urls = package_urls(ecosystem)
-    usernames = get_repo_usernames(urls)
-    ui = user_info(ecosystem)
+    proj_info = user_info(ecosystem)
 
-    def get_userinfo(row):
-        try:
-            return ui.loc[row["provider_name"], row["login"]]
-        except KeyError:
-            return {}
-
-    proj_info = usernames.apply(get_userinfo, axis=1).dropna()
     # drop projects for which we don't have user/org info (i.e. deleted)
-    cs = cs.reindex(user_info.index)
+    cs = cs.reindex(proj_info.index)
 
     # at this point cs is a pd.Dataframe, cs.loc[project, month] = value
     # now let's convert it into a single column with index (project, month)
