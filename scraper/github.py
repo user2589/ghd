@@ -127,9 +127,9 @@ class GitHubAPI(object):
     _instance = None  # instance of API() for Singleton pattern implementation
     tokens = None
 
-    def __new__(cls):  # Singleton
+    def __new__(cls, *args, **kwargs):  # Singleton
         if not isinstance(cls._instance, cls):
-            cls._instance = super(GitHubAPI, cls).__new__(cls)
+            cls._instance = super(GitHubAPI, cls).__new__(cls, *args, **kwargs)
         return cls._instance
 
     def __init__(self, tokens=_tokens, timeout=30):
