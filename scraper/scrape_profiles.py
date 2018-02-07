@@ -27,7 +27,10 @@ if __name__ == '__main__':
     writer = None
 
     for login in args.input:
-        data = api.user_info(login.strip())
+        try:
+            data = api.user_info(login.strip())
+        except github.RepoDoesNotExist:
+            data = {'login': login}
 
         if not writer:
             writer = csv.DictWriter(args.output, data.keys())
