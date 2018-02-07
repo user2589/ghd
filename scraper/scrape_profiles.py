@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
+import pandas as pd
+
 import argparse
+
 import github
-import csv
 
 
 if __name__ == '__main__':
@@ -24,16 +26,12 @@ if __name__ == '__main__':
     tokens = args.token or None
     api = github.GitHubAPI(tokens=tokens)
 
-    writer = None
 
-    for login in args.input:
-        try:
-            data = api.user_info(login.strip())
-        except github.RepoDoesNotExist:
-            data = {'login': login}
+    def gen():
+        for login in args.input:
+            try:
+                yield api.user_info(login.strip())
+            except github.RepoDoesNotExist:
+                continue
 
-        if not writer:
-            writer = csv.DictWriter(args.output, data.keys())
-            writer.writeheader()
-
-        writer.writerow(data)
+    pd.DataFrame(gen()).to_csv(args.output, encoding="utf8")
