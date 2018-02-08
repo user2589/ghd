@@ -239,6 +239,19 @@ class GitHubAPI(object):
                 'verified': commit.get('verification', {}).get('verified')
             }
 
+    def repo_pulls(self, repo_name, page=None):
+        # type: (str, int) -> Iterable[dict]
+        url = "repos/%s/pulls" % repo_name
+
+        # might throw RepoDoesNotExist
+        if page is None:
+            data = self.request(url, paginate=True, state='all')
+        else:
+            data = self.request(url, page=page, per_page=100, state='all')
+
+        for pull_request in data:
+            yield pull_request
+
     def user_info(self, user):
         # TODO: support pagination
         # might throw RepoDoesNotExist:
