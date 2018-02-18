@@ -6,11 +6,11 @@ import collections
 from common import threadpool
 
 
-def map(data, func, num_workers=None):
+def map(func, data, num_workers=None):
     """
 
     >>> s = pd.Series(range(120, 0, -1))
-    >>> s2 = map(s, lambda i, x: x ** 3.75)
+    >>> s2 = map(lambda i, x: x ** 3.75, s)
     >>> isinstance(s2, type(s))
     True
     >>> len(s) == len(s2)
@@ -18,7 +18,7 @@ def map(data, func, num_workers=None):
     >>> (s2 == s.map(lambda x: x ** 3.75)).all()
     True
     >>> s = list(range(120, 0, -1))
-    >>> s2 = map(s, lambda i, x: x ** 3.75)
+    >>> s2 = map(lambda i, x: x ** 3.75, s)
     >>> isinstance(s2, type(s))
     True
     >>> len(s) == len(s2)
@@ -26,7 +26,7 @@ def map(data, func, num_workers=None):
     >>> all(x ** 3.75 == s2[i] for i, x in enumerate(s))
     True
     >>> s = dict(enumerate(range(120, 0, -1)))
-    >>> s2 = map(s, lambda i, x: x ** 3.75)
+    >>> s2 = map(lambda i, x: x ** 3.75, s)
     >>> isinstance(s2, type(s))
     True
     >>> len(s) == len(s2)
@@ -142,7 +142,7 @@ class MapReduce(object):
         assert isinstance(data, collections.Iterable), "Iterable expected"
 
         if cls.map:
-            data = map(data, cls.map)
+            data = map(cls.map, data)
 
         if cls.reduce:
             data = cls.reduce(data)

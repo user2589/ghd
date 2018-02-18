@@ -42,4 +42,4 @@ class Command(BaseCommand):
                 return
             scraper.issues(url)
 
-        mapreduce.map(urls, collect_scraper, num_workers=num_workers)
+        mapreduce.map(collect_scraper, urls, num_workers=num_workers)

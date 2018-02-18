@@ -133,7 +133,7 @@ def package_urls(ecosystem):
     # - more than 16 threads make GitHub to choke even on public urls
     # - some malformed URLs will result in NaN (e.g. NPM abwa-gulp and
     #       barco-jobs), so need to fillna()
-    se = mapreduce.map(urls, exists, num_workers=16).fillna(False)
+    se = mapreduce.map(exists, urls, num_workers=16).fillna(False)
 
     return urls[se]
 
@@ -235,8 +235,9 @@ def user_info(ecosystem):
     # ensure uniqueness of (provider, login) pairs to avoid extra requests
     # GitHub seems to ban IP (will get HTTP 403) if use 8 workers
     ui = mapreduce.map(
+        get_user_info,
         usernames.groupby(["provider_name", "login"]).first().reset_index(),
-        get_user_info, num_workers=6)
+        num_workers=6)
 
     # TODO: move to provider
     ui["org"] = ui["type"].map({"Organization": True, "User": False})
