@@ -128,7 +128,7 @@ def public_domains():
     x.extend([
         'gmail.com', 'users.noreply.github.com', 'hotmail.com',
         'googlemail.com', 'users.sourceforge.net', 'iki.fi',
-        'yahoo.com', 'me.com', 'gmx.de', 'cihar.com',
+        'yahoo.com', 'me.com', 'gmx.de', 'cihar.com', 'ya.ru',
         'yandex.ru', 'outlook.com', 'gmx.net', 'web.de', 'pobox.com',
         'yahoo.co.uk', 'qq.com', 'free.fr', 'icloud.com', '163.com',
         '50mail.com', 'live.com', 'lavabit.com', 'mail.ru', '126.com',
