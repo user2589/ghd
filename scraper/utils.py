@@ -329,7 +329,7 @@ def issues(repo_url):
                  'closed_at']).set_index('number', drop=True)
 
 
-@fs_cache('aggregate')
+# @fs_cache('aggregate')
 def non_dev_issues(repo_name):
     # type: (str) -> pd.DataFrame
     """Same as new_issues with subtracted issues authored by contributors

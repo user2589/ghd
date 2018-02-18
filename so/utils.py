@@ -25,7 +25,7 @@ DATASET_PARTS = {
 
 logger = logging.getLogger('ghd.so')
 
-so_cache = d.fs_cache('so')
+fs_cache = d.fs_cache('so')
 
 
 def get_fname(dataset_part):
@@ -284,7 +284,7 @@ class PostReader(SOHandler):
             self.stats.loc['ALL', month] += 1
 
 
-@so_cache
+@fs_cache
 def question_stats():
     # type: () -> pd.DataFrame
     """Get Pandas dataframe with monthly question statistics. Index is tags,
@@ -320,14 +320,13 @@ def adjacency_matrix():
     # type: () -> pd.DataFrame
     # the resulting matrix is huge and makes pd.read_csv to freeze
     # thus, manual cache
-    fname = so_cache.get_cache_fname("adjacency")
-    if so_cache.expired(fname):
+    fname = fs_cache.get_cache_fname("adjacency")
+    if fs_cache.expired(fname):
         df = parse(AdjacencyHandler).matrix
         df.to_csv(fname)
         return df
     else:
         reader = csv.reader(open(fname))
-        # TODO: speedup using common.clustering_data example
         names = reader.next()[1:]
         df = pd.DataFrame({row[0]: np.array(row[1:], dtype=np.float32)
                            for row in reader},  index=names).T
@@ -336,7 +335,7 @@ def adjacency_matrix():
         return df.astype(int)
 
 
-@so_cache
+@fs_cache
 def correlation(tag):
     stat = adjacency_matrix()[tag]
     return stat / stat[tag]

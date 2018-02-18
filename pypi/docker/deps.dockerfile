@@ -1,6 +1,6 @@
 FROM ubuntu
 
-MAINTAINER Marat <marat@cmu.edu>
+LABEL maintainer="Marat <marat@cmu.edu>"
 
 RUN apt-get update && apt-get install -y python python3 python-setuptools python3-setuptools
 

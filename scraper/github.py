@@ -194,7 +194,6 @@ class GitHubAPI(object):
         # type: (str, int) -> Iterable[dict]
         url = "repos/%s/issues" % repo_name
 
-        # might throw RepoDoesNotExist
         if page is None:
             data = self.request(url, paginate=True, state='all')
         else:
@@ -217,7 +216,6 @@ class GitHubAPI(object):
 
         url = "repos/%s/commits" % repo_name
 
-        # might throw RepoDoesNotExist
         if page is None:
             data = self.request(url, paginate=True)
         else:
@@ -243,18 +241,15 @@ class GitHubAPI(object):
         # type: (str, int) -> Iterable[dict]
         url = "repos/%s/pulls" % repo_name
 
-        # might throw RepoDoesNotExist
         if page is None:
             data = self.request(url, paginate=True, state='all')
         else:
             data = self.request(url, page=page, per_page=100, state='all')
 
-        for pull_request in data:
-            yield pull_request
+        # TODO: remove extra fields to allow instantiation of pd.Dataframe
+        return data
 
     def user_info(self, user):
-        # TODO: support pagination
-        # might throw RepoDoesNotExist:
         # Docs: https://developer.github.com/v3/users/#response
         return self.request("users/" + user)
 
