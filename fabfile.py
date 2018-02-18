@@ -15,6 +15,7 @@ def test():
         fab.local("python -m unittest common.test")
         fab.local("python -m doctest common/email.py")
         fab.local("python -m doctest common/utils.py")
+        fab.local("python -m doctest common/mapreduce.py")
         fab.local("python -m doctest common/versions.py")
         fab.local("python -m doctest pypi/utils.py")
         fab.local("python -m doctest scraper/utils.py")

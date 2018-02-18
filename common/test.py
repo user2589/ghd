@@ -4,19 +4,19 @@ from __future__ import unicode_literals, print_function
 import unittest
 import random
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 
 from common import decorators as d
-from common import utils as common
-from common import email
+from common import mapreduce
+from common import threadpool
 
 
-def series(length, *args):
+def series(length):
     return pd.Series(np.random.rand(length) * 100).astype(int)
 
 
-def dataframe(x, y, *args):
+def dataframe(x, y):
     return pd.DataFrame(np.random.rand(x, y) * 100).astype(int)
 
 
@@ -57,6 +57,29 @@ class TestDecorators(unittest.TestCase):
         self.assertIsInstance(cdataframe(10, 10, 'one', 'two'), pd.DataFrame)
 
         decorator.invalidate(cdataframe)
+
+
+class TestThreadpool(unittest.TestCase):
+
+    def test_async_mapping(self):
+        tp = threadpool.ThreadPool()
+        data = range(20) * 30
+        results = []
+
+        def callback(status):
+            results.append(status)
+
+        def do(x):
+            return x ** 3.75
+
+        for x in data:
+            tp.submit(do, x, callback=callback)
+        tp.shutdown()
+
+        response = [do(x) for x in data]
+
+        self.assertEqual(len(response), len(results))
+        self.assertEqual(sum(response), sum(results))
 
 
 if __name__ == "__main__":

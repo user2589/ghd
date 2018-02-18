@@ -7,6 +7,33 @@ from common import threadpool
 
 
 def map(data, func, num_workers=None):
+    """
+
+    >>> s = pd.Series(range(120, 0, -1))
+    >>> s2 = map(s, lambda i, x: x ** 3.75)
+    >>> isinstance(s2, type(s))
+    True
+    >>> len(s) == len(s2)
+    True
+    >>> (s2 == s.map(lambda x: x ** 3.75)).all()
+    True
+    >>> s = list(range(120, 0, -1))
+    >>> s2 = map(s, lambda i, x: x ** 3.75)
+    >>> isinstance(s2, type(s))
+    True
+    >>> len(s) == len(s2)
+    True
+    >>> all(x ** 3.75 == s2[i] for i, x in enumerate(s))
+    True
+    >>> s = dict(enumerate(range(120, 0, -1)))
+    >>> s2 = map(s, lambda i, x: x ** 3.75)
+    >>> isinstance(s2, type(s))
+    True
+    >>> len(s) == len(s2)
+    True
+    >>> all(x ** 3.75 == s2[i] for i, x in s.items())
+    True
+    """
     backend = threadpool.ThreadPool(n_workers=num_workers)
     iterable = None
     # pd.Series didn't have .items() until pandas 0.21,
@@ -35,6 +62,8 @@ def map(data, func, num_workers=None):
             mapped, orient='index').reindex(data.index)
     elif isinstance(data, pd.Series):
         return pd.Series(mapped).reindex(data.index)
+    elif isinstance(data, list):
+        return [mapped[i] for i in range(len(data))]
     else:
         # in Python, hash(<int>) := <int>, so guaranteed to be in order for list
         # and tuple. For other types
