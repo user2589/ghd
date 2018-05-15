@@ -18,7 +18,7 @@ import tempfile
 from xml.etree import ElementTree
 
 from common import decorators as d
-from common import email
+from common import email_utils as email
 from common import threadpool
 from common import versions
 import scraper

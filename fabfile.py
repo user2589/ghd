@@ -13,7 +13,7 @@ fab.env.hosts = settings.DEPLOY_HOSTS
 def test():
     with fab.settings(warn_only=True):
         fab.local("python -m unittest common.test")
-        fab.local("python -m doctest common/email.py")
+        fab.local("python -m doctest common/email_utils.py")
         fab.local("python -m doctest common/utils.py")
         fab.local("python -m doctest common/mapreduce.py")
         fab.local("python -m doctest common/versions.py")

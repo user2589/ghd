@@ -11,7 +11,7 @@ import pandas as pd
 from django.core.management.base import BaseCommand
 
 from common import decorators
-from common import email
+from common import email_utils as email
 from scraper import utils as scraper
 
 logging.basicConfig()

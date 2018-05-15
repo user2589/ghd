@@ -8,7 +8,7 @@ import logging
 import re
 
 from common import decorators
-from common import email
+from common import email_utils as email
 from scraper import github
 
 """ First contrib date without MIN_DATE restriction:
@@ -58,8 +58,8 @@ PROVIDERS = {
 'bitbucket.org/abcd/efgh'
 """
 URL_PATTERN = re.compile(
-    "(github\.com|bitbucket\.org|gitlab\.com)/"
-    "([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)")
+    r"(github\.com|bitbucket\.org|gitlab\.com)/"
+    r"([a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+)")
 
 
 def named_url_pattern(name):
@@ -67,7 +67,7 @@ def named_url_pattern(name):
     This pattern must be consistent with URL_PATTERN
     So far it is only used by pypi.Package to search for URL in code
     """
-    return "(github\.com|bitbucket\.org|gitlab\.com)/[a-zA-Z0-9_.-]+/" + name
+    return r"(github\.com|bitbucket\.org|gitlab\.com)/[a-zA-Z0-9_.-]+/" + name
 
 
 def parse_url(url):
