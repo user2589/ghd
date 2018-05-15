@@ -24,6 +24,22 @@ class TokenNotReady(requests.HTTPError):
     pass
 
 
+def parse_commit(commit):
+    github_author = commit['author'] or {}
+    commit_author = commit['commit'].get('author') or {}
+    return {
+        'sha': commit['sha'],
+        'author': github_author.get('login'),
+        'author_name': commit_author.get('name'),
+        'author_email': commit_author.get('email'),
+        'authored_date': commit_author.get('date'),
+        'message': commit['commit']['message'],
+        'committed_date': commit['commit']['committer']['date'],
+        'parents': "\n".join(p['sha'] for p in commit['parents']),
+        'verified': commit.get('verification', {}).get('verified')
+    }
+
+
 class GitHubAPIToken(object):
     api_url = "https://api.github.com/"
 
@@ -37,7 +53,10 @@ class GitHubAPIToken(object):
     def __init__(self, token=None, timeout=None):
         if token is not None:
             self.token = token
-            self._headers = {"Authorization": "token " + token}
+            self._headers = {
+                "Authorization": "token " + token,
+                "Accept": "application/vnd.github.v3+json"
+            }
         self.limit = {}
         for api_class in ('core', 'search'):
             self.limit[api_class] = {
@@ -211,43 +230,75 @@ class GitHubAPI(object):
                     'title': issue['title']
                 }
 
-    def repo_commits(self, repo_name, page=None):
-        # type: (str, int) -> Iterable[dict]
+    def repo_commits(self, repo_name):
 
         url = "repos/%s/commits" % repo_name
 
-        if page is None:
-            data = self.request(url, paginate=True)
-        else:
-            data = self.request(url, page=page, per_page=100)
-
-        for commit in data:
+        for commit in self.request(url, paginate=True):
             # might be None for commits authored outside of github
-            github_author = commit['author'] or {}
-            commit_author = commit['commit'].get('author') or {}
-            yield {
-                'sha': commit['sha'],
-                'author': github_author.get('login'),
-                'author_name': commit_author.get('name'),
-                'author_email': commit_author.get('email'),
-                'authored_date': commit_author.get('date'),
-                'message': commit['commit']['message'],
-                'committed_date': commit['commit']['committer']['date'],
-                'parents': "\n".join(p['sha'] for p in commit['parents']),
-                'verified': commit.get('verification', {}).get('verified')
-            }
+            yield parse_commit(commit)
 
-    def repo_pulls(self, repo_name, page=None):
-        # type: (str, int) -> Iterable[dict]
+    def repo_pulls(self, repo_name):
         url = "repos/%s/pulls" % repo_name
 
-        if page is None:
-            data = self.request(url, paginate=True, state='all')
-        else:
-            data = self.request(url, page=page, per_page=100, state='all')
+        for pr in self.request(url, paginate=True, state='all'):
+            yield {
+                'id': pr['number'],  # no idea what is in the id field
+                'title': pr['title'],
+                'body': pr['body'],
+                'labels': 'labels' in pr and [l['name'] for l in pr['labels']],
+                'created_at': pr['created_at'],
+                'updated_at': pr['updated_at'],
+                'closed_at': pr['closed_at'],
+                'merged_at': pr['merged_at'],
+                'author': pr['user']['login'],
+                'head': pr['head']['repo']['full_name'],
+                'head_branch': pr['head']['label'],
+                'base': pr['base']['repo']['full_name'],
+                'base_branch': pr['base']['label'],
+            }
 
-        # TODO: remove extra fields to allow instantiation of pd.Dataframe
-        return data
+    def pull_request_commits(self, repo, pr_id):
+        # type: (str, int) -> Iterable[dict]
+        url = "repos/%s/pulls/%d/commits" % (repo, pr_id)
+
+        for commit in self.request(url, paginate=True, state='all'):
+            yield parse_commit(commit)
+
+    def issue_comments(self, repo, issue_id):
+        """ Return comments on an issue or a pull request
+        Note that for pull requests this method will return only general
+        comments to the pull request, but not review comments related to
+        some code. Use review_comments() to get those instead
+
+        :param repo: str 'owner/repo'
+        :param issue_id: int, either an issue or a Pull Request id
+        """
+        url = "repos/%s/issues/%s/comments" % (repo, issue_id)
+
+        for comment in self.request(url, paginate=True, state='all'):
+            yield {
+                'body': comment['body'],
+                'author': comment['user']['login'],
+                'created_at': comment['created_at'],
+                'updated_at': comment['updated_at'],
+            }
+
+    def review_comments(self, repo, pr_id):
+        """ Pull request comments attached to some code
+        See also issue_comments()
+        """
+        url = "repos/%s/pulls/%s/comments" % (repo, pr_id)
+
+        for comment in self.request(url, paginate=True, state='all'):
+            yield {
+                'id': comment['id'],
+                'body': comment['body'],
+                'author': comment['user']['login'],
+                'created_at': comment['created_at'],
+                'updated_at': comment['updated_at'],
+                'author_association': comment['author_association']
+            }
 
     def user_info(self, user):
         # Docs: https://developer.github.com/v3/users/#response
