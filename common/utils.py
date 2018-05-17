@@ -150,10 +150,10 @@ def get_repo_usernames(urls):
         - provider_name: str, {github.com|bitbucket.org|gitlab.com}
         - login: str, provider-specific login
 
-    >>> urls = s = pd.Series(
-        ["github.com/pandas-dev/pandas",
-        "github.com/user2589/ghd",
-        "github.com/dkhsd/asdf"])
+    >>> urls = s = pd.Series([
+    ...     "github.com/pandas-dev/pandas",
+    ...     "github.com/user2589/ghd",
+    ...     "github.com/dkhsd/asdf"])
     >>> usernames = get_repo_usernames(urls)
     >>> isinstance(usernames, pd.DataFrame)
     True
@@ -497,9 +497,9 @@ def cumulative_dependencies(deps):
       C    D
     /  \
    E    F
-   >>> down = pd.DataFrame({
-        1: [set(['c', 'd']), set(), set(['e', 'f']), set(), set(), set()]},
-            index=['a', 'b', 'c', 'd', 'e', 'f'])
+   >>> down = pd.DataFrame(
+   ...     {1: [set(['c', 'd']), set(), set(['e', 'f']), set(), set(), set()]},
+   ...     index=['a', 'b', 'c', 'd', 'e', 'f'])
    >>> len(cumulative_dependencies(down).loc['a', 1])
    5
    >>> len(cumulative_dependencies(down).loc['c', 1])
@@ -655,6 +655,7 @@ def contributors_centrality(ecosystem, centrality_type):
     >>> 150 < len(cc.columns) < 200
     True
     >>> cc.loc["django", "2017-12"] > 40  # ~90 for the late 2017
+    True
     """
     log = logging.getLogger("ghd.common.contributors_centrality")
 
