@@ -242,8 +242,12 @@ class GitHubAPI(object):
         url = "repos/%s/pulls" % repo_name
 
         for pr in self.request(url, paginate=True, state='all'):
+            head = pr.get('head', {})
+            head_repo = head and head.get('repo', ())
+            base = pr.get('base', {})
+            base_repo = base and base.get('repo', ())
             yield {
-                'id': pr['number'],  # no idea what is in the id field
+                'id': int(pr['number']),  # no idea what is in the id field
                 'title': pr['title'],
                 'body': pr['body'],
                 'labels': 'labels' in pr and [l['name'] for l in pr['labels']],
@@ -252,10 +256,10 @@ class GitHubAPI(object):
                 'closed_at': pr['closed_at'],
                 'merged_at': pr['merged_at'],
                 'author': pr['user']['login'],
-                'head': pr['head']['repo']['full_name'],
-                'head_branch': pr['head']['label'],
-                'base': pr['base']['repo']['full_name'],
-                'base_branch': pr['base']['label'],
+                'head': head_repo.get('full_name'),
+                'head_branch': head.get('label'),
+                'base': base_repo.get('full_name'),
+                'base_branch': base.get('label'),
             }
 
     def pull_request_commits(self, repo, pr_id):
